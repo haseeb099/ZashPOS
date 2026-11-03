@@ -20,7 +20,7 @@ class SetupCommand extends Command
      *
      * @var string
      */
-    protected $description = 'Install NexoPOS from the command line.';
+    protected $description = 'Install ZashPOS from the command line.';
 
     private $ns_store_name;
 
@@ -79,7 +79,7 @@ class SetupCommand extends Command
         }
 
         if ( Helper::installed() ) {
-            return $this->error( __( 'NexoPOS is already installed.' ) );
+            return $this->error( __( 'ZashPOS is already installed.' ) );
         }
 
         $this->setupLanguage();
@@ -105,7 +105,7 @@ class SetupCommand extends Command
                 'ns_store_name' => $this->ns_store_name,
             ] );
 
-            return $this->info( 'Thank you, NexoPOS has been successfully installed.' );
+            return $this->info( 'Thank you, ZashPOS has been successfully installed.' );
         } else {
             return $this->info( 'The installation has been aborted.' );
         }
@@ -148,7 +148,7 @@ class SetupCommand extends Command
     private function setupLanguage()
     {
         while ( empty( $this->language ) ) {
-            $langIndex = $this->choice( __( 'In which language would you like to install NexoPOS ?' ), array_values( config( 'nexopos.languages' ) ) );
+            $langIndex = $this->choice( __( 'In which language would you like to install ZashPOS ?' ), array_values( config( 'nexopos.languages' ) ) );
             $this->language = array_keys( config( 'nexopos.languages' ) )[ $langIndex ];
 
             if ( strlen( $this->language ) != 2 ) {

@@ -30,7 +30,7 @@ class CheckApplicationHealthMiddleware
         if ( in_array( env( 'QUEUE_CONNECTION' ), [ 'sync' ] ) ) {
             /**
              * Will check if Cron Jobs are
-             * correctly set for NexoPOS
+             * correctly set for ZashPOS
              */
             ns()->checkCronConfiguration();
 

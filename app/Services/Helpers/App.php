@@ -38,7 +38,7 @@ trait App
 
     public static function pageTitle( $string )
     {
-        $storeName = ns()->option->get( 'ns_store_name' ) ?: 'NexoPOS';
+        $storeName = ns()->option->get( 'ns_store_name' ) ?: 'ZashPOS';
 
         return sprintf(
             Hook::filter( 'ns-page-title', __( '%s — %s' ) ),

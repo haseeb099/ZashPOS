@@ -302,11 +302,11 @@ class MarketplaceService
         ns()->option->set( 'mynexopos_token_expires_in', Carbon::now()->addSeconds( $response->json( 'expires_in' ) ) );
 
         /**
-         * Make one signed request immediately so My NexoPOS can bind the
+         * Make one signed request immediately so My ZashPOS can bind the
          * newly-issued OAuth token to this installation.
          */
         if ( ! $this->testConnection() ) {
-            throw new CoreException( __( 'My NexoPOS rejected this installation connection.' ) );
+            throw new CoreException( __( 'My ZashPOS rejected this installation connection.' ) );
         }
 
         /**
@@ -316,10 +316,10 @@ class MarketplaceService
         if ( session()->has( 'marketplace_auth_redirect_url' ) ) {
             $redirectUrl = session()->pull( 'marketplace_auth_redirect_url' );
 
-            return redirect( $redirectUrl )->with( 'success', __( 'Successfully connected to My NexoPOS.' ) );
+            return redirect( $redirectUrl )->with( 'success', __( 'Successfully connected to My ZashPOS.' ) );
         }
 
-        return redirect( route( ns()->routeName( 'ns.dashboard.modules-marketplace' ) ) )->with( 'success', __( 'Successfully connected to My NexoPOS.' ) );
+        return redirect( route( ns()->routeName( 'ns.dashboard.modules-marketplace' ) ) )->with( 'success', __( 'Successfully connected to My ZashPOS.' ) );
     }
 
     public function addToCart( int|string $productId )
@@ -527,7 +527,7 @@ class MarketplaceService
                 $this->handleProtectedResponse( $response );
 
                 ns()->notification->create(
-                    title: __( 'My NexoPOS: Authentication Failed' ),
+                    title: __( 'My ZashPOS: Authentication Failed' ),
                     description: sprintf( __( 'We\'re unable to retrieve the user details from my.nexopos.com. %s.' ), $parsedResponse ),
                     url: route( 'ns.dashboard.modules-list' ),
                     identifier: 'marketplace.authentication.feedback'
@@ -539,7 +539,7 @@ class MarketplaceService
             return true;
         } catch ( Exception $exception ) {
             ns()->notification->create(
-                title: __( 'My NexoPOS: Authentication Failed' ),
+                title: __( 'My ZashPOS: Authentication Failed' ),
                 description: sprintf( __( 'An unexpected error occured: %s.' ), $exception->getMessage() ),
                 url: route( 'ns.dashboard.modules-list' ),
                 identifier: 'marketplace.authentication.feedback'
@@ -550,7 +550,7 @@ class MarketplaceService
     }
 
     /**
-     * Revoke this installation on My NexoPOS, then remove the local connection.
+     * Revoke this installation on My ZashPOS, then remove the local connection.
      */
     public function disconnect(): array
     {
@@ -559,7 +559,7 @@ class MarketplaceService
 
             return [
                 'status' => 'success',
-                'message' => __( 'This installation is already disconnected from My NexoPOS.' ),
+                'message' => __( 'This installation is already disconnected from My ZashPOS.' ),
             ];
         }
 
@@ -582,18 +582,18 @@ class MarketplaceService
 
             return [
                 'status' => 'success',
-                'message' => __( 'This installation has been disconnected from My NexoPOS.' ),
+                'message' => __( 'This installation has been disconnected from My ZashPOS.' ),
             ];
         }
 
         throw new CoreException(
-            $response->json( 'message' ) ?: __( 'Failed to disconnect this installation from My NexoPOS.' )
+            $response->json( 'message' ) ?: __( 'Failed to disconnect this installation from My ZashPOS.' )
         );
     }
 
     public function clearConnection(): void
     {
-        foreach ([
+        foreach ( [
             'mynexopos_access_token',
             'mynexopos_refresh_token',
             'mynexopos_token_type',

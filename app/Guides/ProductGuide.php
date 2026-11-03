@@ -112,7 +112,7 @@ class ProductGuide
                         element: '[name="accurate_tracking"]',
                         popover: Guide::popover(
                             title: __( 'Accurate Tracking' ),
-                            description: __( 'By enabling this options, NexoPOS will be able to the product sold. This will be useful to determine on which purchase order the procurement was provided.' ),
+                            description: __( 'By enabling this options, ZashPOS will be able to the product sold. This will be useful to determine on which purchase order the procurement was provided.' ),
                             side: 'bottom'
                         ),
                     ),

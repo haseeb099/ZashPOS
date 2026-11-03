@@ -38,7 +38,7 @@
                     <i class="las la-unlink text-xl" aria-hidden="true"></i>
                 </span>
                 <span class="min-w-0 flex-1">
-                    <span class="block text-sm font-semibold text-error-tertiary">{{ isDisconnecting ? __( 'Disconnecting...' ) : __( 'Disconnect from My NexoPOS' ) }}</span>
+                    <span class="block text-sm font-semibold text-error-tertiary">{{ isDisconnecting ? __( 'Disconnecting...' ) : __( 'Disconnect from My ZashPOS' ) }}</span>
                     <span class="mt-1 block text-xs leading-5 text-fontcolor-soft">{{ __( 'Revoke this installation and remove its locally stored connection credentials.' ) }}</span>
                 </span>
             </button>
@@ -51,7 +51,7 @@
                     <i class="las la-link text-xl" aria-hidden="true"></i>
                 </span>
                 <span class="min-w-0 flex-1">
-                    <span class="block text-sm font-semibold">{{ __( 'Connect to My NexoPOS' ) }}</span>
+                    <span class="block text-sm font-semibold">{{ __( 'Connect to My ZashPOS' ) }}</span>
                     <span class="mt-1 block text-xs leading-5 text-fontcolor-soft">{{ __( 'Connect this installation to access licenses, downloads, and your marketplace cart.' ) }}</span>
                 </span>
             </a>
@@ -110,20 +110,20 @@ export default {
         disconnect() {
             Popup.show( nsConfirmPopup, {
                 title: __( 'Confirm your action' ),
-                message: __( 'Disconnect this NexoPOS installation from My NexoPOS? You will need to connect again before accessing licenses, downloads, or your marketplace cart.' ),
+                message: __( 'Disconnect this ZashPOS installation from My ZashPOS? You will need to connect again before accessing licenses, downloads, or your marketplace cart.' ),
                 onAction: ( action ) => {
                     if ( action ) {
                         this.isDisconnecting = true;
 
                         nsHttpClient.delete( '/api/marketplace/connection' ).subscribe( {
                             next: response => {
-                                nsSnackBar.success( response.message || __( 'This installation has been disconnected from My NexoPOS.' ) );
+                                nsSnackBar.success( response.message || __( 'This installation has been disconnected from My ZashPOS.' ) );
                                 window.location.reload();
                                 this.isDisconnecting = false;
                             },
                             error: error => {
                                 this.isDisconnecting = false;
-                                nsSnackBar.error( error.message || __( 'Failed to disconnect this installation from My NexoPOS.' ) );
+                                nsSnackBar.error( error.message || __( 'Failed to disconnect this installation from My ZashPOS.' ) );
                             },
                         } );
                     }

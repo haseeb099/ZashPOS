@@ -34,7 +34,7 @@ class OrderAfterDeletedEventListener
         $this->cashRegistersService->deleteRegisterHistoryUsingOrder( $event->order );
 
         /**
-         * We'll instruct NexoPOS to perform
+         * We'll instruct ZashPOS to perform
          * a backend jobs to update the report.
          */
         ShouldRefreshReportEvent::dispatch( now()->parse( $event->order->updated_at ) );

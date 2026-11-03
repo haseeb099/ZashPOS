@@ -452,7 +452,7 @@ class CoreService
             identifier: NotificationsEnum::NSCRONDISABLED,
             source: 'system',
             url: 'https://my.nexopos.com/en/documentation/troubleshooting/workers-or-async-requests-disabled?utm_source=nexopos&utm_campaign=warning&utm_medium=app',
-            description: __( "Cron jobs aren't configured correctly on NexoPOS. This might restrict necessary features. Click here to learn how to fix it." ),
+            description: __( "Cron jobs aren't configured correctly on ZashPOS. This might restrict necessary features. Click here to learn how to fix it." ),
         )->dispatchForGroup( Role::namespace( Role::ADMIN ) );
     }
 
@@ -468,7 +468,7 @@ class CoreService
             identifier: NotificationsEnum::NSWORKERDISABLED,
             source: 'system',
             url: 'https://my.nexopos.com/en/documentation/troubleshooting/workers-or-async-requests-disabled?utm_source=nexopos&utm_campaign=warning&utm_medium=app',
-            description: __( 'NexoPOS is unable to schedule background tasks. This might restrict necessary features. Click here to learn how to fix it.' ),
+            description: __( 'ZashPOS is unable to schedule background tasks. This might restrict necessary features. Click here to learn how to fix it.' ),
         )->dispatchForGroup( Role::namespace( Role::ADMIN ) );
     }
 

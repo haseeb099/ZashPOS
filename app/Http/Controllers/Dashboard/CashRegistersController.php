@@ -1,7 +1,7 @@
 <?php
 
 /**
- * NexoPOS Controller
+ * ZashPOS Controller
  *
  * @since  1.0
  **/

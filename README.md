@@ -1,24 +1,24 @@
-[![Latest Stable Version](https://poser.pugx.org/blair2004/nexopos/v)](https://packagist.org/packages/blair2004/nexopos) [![Total Downloads](https://poser.pugx.org/blair2004/nexopos/downloads)](https://packagist.org/packages/blair2004/nexopos) [![Latest GitHub Release](https://img.shields.io/github/v/release/Blair2004/NexoPOS)](https://github.com/Blair2004/NexoPOS/releases) [![License](https://img.shields.io/github/license/Blair2004/NexoPOS)](LICENSE)
+[![License](https://img.shields.io/github/license/Blair2004/NexoPOS)](LICENSE)
 
 <p align="center">
-  <img src="https://user-images.githubusercontent.com/5265663/162700085-40ed00ca-9154-42cb-850a-ccf1c2db2d5d.png" alt="NexoPOS"/>
+  <img src="public/svg/zashpos-variant-1.svg" alt="ZashPOS" width="200"/>
 </p>
 
-# NexoPOS
+# ZashPOS
 
-NexoPOS is a modern, extensible point-of-sale platform for retail stores, restaurants, cafés, warehouses, and other product- or service-based businesses. It brings sales, inventory, customers, purchasing, accounting, reporting, and staff operations together in one application.
+ZashPOS is a modern, extensible point-of-sale platform for retail stores, restaurants, cafés, warehouses, and other product- or service-based businesses. It brings sales, inventory, customers, purchasing, accounting, reporting, and staff operations together in one application.
 
-The current ecosystem is built around the NexoPOS 6.2.x core and includes first-party modules, Windows applications, cloud hosting, developer tools, and the [My NexoPOS](https://my.nexopos.com/en) marketplace.
+**Based on [NexoPOS](https://github.com/Blair2004/NexoPOS).** This repository is a branded fork of NexoPOS v6.3.0 (Laravel 12, Vue 3, Tailwind 4). Upstream project, documentation, and marketplace links below still refer to NexoPOS where that is the external product.
 
 ### Deployment
-NexoPOS is partnering with InstaPods to offer you a smooth deployment experience with NexoPOS.
+Upstream NexoPOS partners with InstaPods for deployment. Those options remain available for this core:
 
 [![Deploy On Nexo Cloud](https://my.nexopos.com/deploy-on-nexo-cloud-button-light.svg)](https://nexopos.cloud?utm_channel=github.com&utm_campaign=readme)
 [![Deploy On InstaPods](https://instapods.com/deploy-button.svg)](https://app.instapods.com/dashboard/pods/create?app=nexopos&ref=nexopos)
 
 ## What the core provides
 
-The NexoPOS core includes:
+The ZashPOS core (NexoPOS-compatible) includes:
 
 - Product, category, unit, tax, and customer management
 - POS sales, orders, payments, receipts, refunds, and registers
@@ -30,65 +30,17 @@ The NexoPOS core includes:
 - Media management, dashboard widgets, and extensibility APIs
 - A module system for adding business-specific features without changing the core
 
-NexoPOS is designed to start as a single-store POS and grow with the business. Multi-store, restaurant, service, workforce, rental, AI, printing, and other workflows are delivered through modules.
+ZashPOS is designed to start as a single-store POS and grow with the business. Multi-store, restaurant, service, workforce, rental, AI, printing, and other workflows are delivered through modules (including our first-party **ZashDine** restaurant module).
 
 ## Marketplace modules and ecosystem
 
-The modules below are distributed separately from the NexoPOS core through the [NexoPOS Marketplace](https://my.nexopos.com/en/marketplace). They are not included in this repository; install them from the marketplace when they match your NexoPOS version.
+Compatible modules can still be obtained from the [NexoPOS Marketplace](https://my.nexopos.com/en/marketplace) when they match this core version. A dedicated **ZashMarket** is planned for first-party ZashPOS add-ons.
 
-<p align="center">
-<img src="https://my.nexopos.com/storage/2026/09/neoxpos-marketplace.jpg">
-</p>
-
-| Module | Adds |
-| --- | --- |
-| [**BellSera**](https://my.nexopos.com/en/marketplace/item/bellsera-spa-salon-booking-management-for-nexopos) | Service appointments, public booking, staff and room availability, walk-in and booking POS order types, service queues, and reporting |
-| [**Bulk Editor**](https://my.nexopos.com/en/marketplace/item/bulk-editor-for-nexopos) | Bulk editing tools for supported NexoPOS resources |
-| [**Gastro**](https://my.nexopos.com/en/marketplace/item/gastro-restaurant-extension-for-nexopos) | Restaurant tables, waiter and chef workflows, kitchen screens, order routing, and product modifiers |
-| [**Google Authenticator**](https://my.nexopos.com/en/marketplace/item/google-authenticator) | Time-based two-factor authentication for user accounts |
-| [**MultiStore**](https://my.nexopos.com/en/marketplace/item/multistore-for-nexopos) | Multiple isolated stores managed from one NexoPOS installation and database |
-| [**Options Export/Import**](https://my.nexopos.com/en/marketplace/item/options-importexport) | Exporting and importing module settings between installations |
-| [**Oxen**](https://my.nexopos.com/en/marketplace/item/oxen-ai-agent-for-nexopos) | Permission-aware AI assistance, approved store-management actions, reports, and MCP access |
-| [**PIN Login**](https://my.nexopos.com/en/marketplace/item/pin-login-module-for-nexopos) | Fast POS PIN login and inactivity security locking |
-| [**NPS Adapter**](https://my.nexopos.com/en/marketplace/item/nps-adapter-for-nexopos) | NexoPOS-side integration for local and network printing workflows |
-| [**QR Menu**](https://my.nexopos.com/en/marketplace/item/qr-menu-digital-restaurant-menu-for-gastro) | Branded, mobile-friendly digital menus generated from the NexoPOS catalog |
-| [**Quick Store Configuration**](https://my.nexopos.com/en/marketplace) | Guided setup for essential store settings |
-| [**Rental**](https://my.nexopos.com/en/marketplace/item/nexopos-rental) | Rental reservations, agreements, inventory movements, returns, maintenance, and notifications |
-| [**Sales Commissions**](https://my.nexopos.com/en/marketplace/item/sales-commissions) | Commission rules and sales-staff commission tracking |
-| [**WorkForce**](https://my.nexopos.com/en/marketplace) | Kiosk attendance, breaks, schedules, timesheets, corrections, and private reports |
-
-Some modules have optional integrations, such as SMS, email, Nexo Print Server, or PIN Login. Check the marketplace listing for each module's supported NexoPOS core range and dependencies.
-
-The [NexoPOS Marketplace](https://my.nexopos.com/en/marketplace) is the authoritative catalog for compatible extensions, native applications, bundles, releases, and licenses. Alongside the modules above, examples of currently available ecosystem products include:
-
-- **[Raw Material Tracker](https://my.nexopos.com/en/marketplace/item/raw-material-tracker)** — recipes, ingredient stock deduction, unit conversion, cost tracking, and consumption history.
-- **[Racks Manager](https://my.nexopos.com/en/marketplace/item/racks-manager)** — structured warehouse storage with racks, shelves, and stock movement controls.
-- **[Hotel Booking](https://my.nexopos.com/en/marketplace/item/hotel-booking)** — reservations, rooms, pricing, invoices, POS payments, and calendar synchronization.
-- **[NexoPOS Rental](https://my.nexopos.com/en/marketplace/item/nexopos-rental)** — rental operations for businesses that need reservations and returns.
-- **[QR Menu](https://my.nexopos.com/en/marketplace/item/qr-menu-digital-restaurant-menu-for-gastro)** — customer-facing digital menus for restaurants, cafés, bars, hotels, and bakeries.
-- **[Oxen](https://my.nexopos.com/en/marketplace/item/oxen-ai-agent-for-nexopos)** — AI assistance grounded in store data with permission checks and approval-controlled mutations.
-- **[Options Import/Export](https://my.nexopos.com/en/marketplace/item/options-importexport)** — portable module configuration.
-
-For installation and updates, use **Modules → Upload Module** in NexoPOS and confirm that the module supports your core version. Download modules from trusted sources such as [My NexoPOS](https://my.nexopos.com/en/marketplace).
-
-## Cloud, self-hosted, and Windows deployments
-
-![cloud-hosting](https://camo.githubusercontent.com/0cbe76dab0c6299fbd4baa706bf0e40515c3d83e7814ae2cddf446e7521d87bb/68747470733a2f2f6d792e6e65786f706f732e636f6d2f73746f726167652f323032362f30372f636861746770742d696d6167652d6a756c2d32382d323032362d31312d30392d32392d616d2e706e67)
-
-Choose the operating model that fits your business:
-
-- **[NexoPOS Cloud](https://nexopos.cloud)** — managed hosting with the infrastructure handled for you.
-- **Self-hosted NexoPOS** — deploy on your own server or hosting provider for full control. The supported environment includes PHP 8.2+, MariaDB 10.11 or MySQL 8.4, Nginx or Apache, Composer, scheduled tasks, and a queue worker such as Supervisor.
-- **[NexoPOS for Windows](https://my.nexopos.com/en/marketplace/item/nexopos-for-windows)** — an all-in-one local Windows environment with NexoPOS, Nginx, HTTPS, SQLite, and printing tools preconfigured.
-- **[NexoPOS Client for Windows](https://my.nexopos.com/en/marketplace/item/nexopos-client-for-windows)** — securely connects additional computers on the same local network to a NexoPOS for Windows server.
-- **[Nexo Print Server](https://my.nexopos.com/en/marketplace/item/nexo-print-server)** — direct Windows printing for ESC/POS-compatible thermal printers, used with the NPS Adapter module.
-- **[Nexo SaaS](https://my.nexopos.com/en/marketplace/item/nexo-saas-build-and-manage-a-nexopos-hosting-business/details)** — deploy and manage multiple NexoPOS installations, subscriptions, domains, backups, and module bundles as a hosted service.
-
-See the [official documentation](https://my.nexopos.com/en/documentation) for environment, installation, Windows, cloud, and local-network guides.
+See the [official NexoPOS documentation](https://my.nexopos.com/en/documentation) for environment, installation, Windows, cloud, and local-network guides.
 
 ## Quick start for developers
 
-NexoPOS is a Laravel application using Vue, Vite, Tailwind CSS, and a first-class module architecture. The root project currently targets PHP 8.2+ and Node.js 24.
+ZashPOS is a Laravel application using Vue, Vite, Tailwind CSS, and a first-class module architecture. The root project currently targets PHP 8.2+ (8.4 recommended) and Node.js 24.
 
 ```bash
 composer install
@@ -99,7 +51,7 @@ npm install
 npm run build
 ```
 
-Configure the database and application URL in `.env`, then run the normal Laravel migrations and workers required by your deployment. The exact production setup depends on whether you use queues, scheduled reports, Reverb, multi-store, printing, or other modules.
+Configure the database and application URL in `.env`, then run the normal Laravel migrations and workers required by your deployment.
 
 Create a new module with the built-in generator:
 
@@ -107,19 +59,17 @@ Create a new module with the built-in generator:
 php artisan make:module
 ```
 
-Custom module source normally lives under `modules/` and contains its own routes, providers, migrations, resources, assets, settings, and tests. Start with the [module creation guide](https://my.nexopos.com/en/documentation/developers-guide/module-creation/creating-module), then see the [module config guide](https://my.nexopos.com/en/documentation/developers-guide/module-creation/module-config-file), [dashboard menu guide](https://my.nexopos.com/en/documentation/developers-guide/module-creation/dashboard-menus), and [NexoPOS API documentation](https://docs.api.nexopos.com).
-
-NexoPOS also documents extension points for dashboard menus and widgets, Vue components, POS cart buttons and product mutation, receipts and invoices, settings, events, and MCP integrations.
+Custom module source normally lives under `modules/` and contains its own routes, providers, migrations, resources, assets, settings, and tests.
 
 ## Demo and resources
 
-- [Try NexoPOS](https://demo.nexopos.com)
+- [Try NexoPOS demo](https://demo.nexopos.com) (upstream)
 - [My NexoPOS](https://my.nexopos.com/en)
 - [Official documentation](https://my.nexopos.com/en/documentation)
 - [Marketplace](https://my.nexopos.com/en/marketplace)
 - [NexoPOS REST API](https://docs.api.nexopos.com)
-- [GitHub releases](https://github.com/Blair2004/NexoPOS/releases)
+- [Upstream GitHub releases](https://github.com/Blair2004/NexoPOS/releases)
 
 ## License
 
-NexoPOS is open source software licensed under the [GNU General Public License v3.0](LICENSE).
+ZashPOS is based on NexoPOS and remains open source software licensed under the [GNU General Public License v3.0](LICENSE).

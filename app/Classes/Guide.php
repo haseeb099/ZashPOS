@@ -39,7 +39,7 @@ class Guide
      *
      * Most properties intentionally follow Driver.js DriveStep.
      *
-     * NexoPOS additions:
+     * ZashPOS additions:
      * - id
      * - route
      * - nextAction
@@ -84,7 +84,7 @@ class Guide
             'data' => $data,
 
             /**
-             * NexoPOS declarative action that should run
+             * ZashPOS declarative action that should run
              * when the Driver.js Next button is clicked.
              */
             'nextAction' => $nextAction,
@@ -246,7 +246,7 @@ class Guide
     }
 
     /**
-     * Validate a declarative NexoPOS guide action.
+     * Validate a declarative ZashPOS guide action.
      */
     protected static function validateAction(
         ?array $action

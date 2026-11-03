@@ -15,7 +15,7 @@ use Illuminate\Support\Facades\Gate;
         @if ( ns()->option->get( 'ns_store_square_logo', false ) )
         <img src="{{ ns()->option->get( 'ns_store_square_logo' ) }}" alt="POS">
         @else
-        <img src="{{ asset( 'svg/nexopos-variant-1.svg' ) }}" class="w-32" alt="POS">
+        <img src="{{ asset( 'svg/zashpos-variant-1.svg' ) }}" class="w-32" alt="POS">
         @endif
         <p class="font-semibold py-2">{{ __( 'Loading...' ) }}</p>
     </div>

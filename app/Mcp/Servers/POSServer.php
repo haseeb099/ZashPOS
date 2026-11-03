@@ -28,10 +28,10 @@ use Laravel\Mcp\Server\Attributes\Instructions;
 use Laravel\Mcp\Server\Attributes\Name;
 use Laravel\Mcp\Server\Attributes\Version;
 
-#[Name( 'NexoPOS MCP Server' )]
+#[Name( 'ZashPOS MCP Server' )]
 #[Version( '1.0.0' )]
 #[Instructions(
-    'This server exposes read and write tools and resources for the NexoPOS point-of-sale system. ' .
+    'This server exposes read and write tools and resources for the ZashPOS point-of-sale system. ' .
     'Use search_products or get_product to look up product catalog items. ' .
     'Use search_customers or get_customer to find customer records. ' .
     'Use search_orders to query and filter multiple orders, or get_order to retrieve a specific order. ' .

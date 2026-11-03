@@ -34,7 +34,7 @@ class GenerateModuleCommand extends Command
      *
      * @var string
      */
-    protected $description = 'Create a new NexoPOS module (supports --no-interaction for non-interactive/AI usage)';
+    protected $description = 'Create a new ZashPOS module (supports --no-interaction for non-interactive/AI usage)';
 
     /**
      * Create a new command instance.
@@ -55,7 +55,7 @@ class GenerateModuleCommand extends Command
     public function handle()
     {
         if ( ! Helper::installed() ) {
-            $this->error( 'NexoPOS is not yet installed.' );
+            $this->error( 'ZashPOS is not yet installed.' );
 
             return 1;
         }
