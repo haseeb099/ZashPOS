@@ -1,0 +1,17 @@
+---
+description: ZashPOS phase workflow (branch, tests, docs, PR, Notion)
+alwaysApply: true
+---
+Plan: Notion page "Zash POS" https://app.notion.com/p/Zash-POS-3f1dd43e0a9d80688b0ffe6ce48c3c19
+
+1. Read AGENTS.md and the relevant .agents/skills/*/SKILL.md first.
+2. Each phase gets its own branch phase-N-name from the previous phase branch. Never commit to master, never force-push, never merge a PR.
+3. Never commit .env, secrets, database/database.sqlite, vendor/, node_modules/ or the leftover test modules under modules/ (Enim3x3Hk etc.). Check git diff --cached --name-only before each commit.
+4. Baseline tests: 128 deprecated, 0 errors, 0 failures (PHP 8.5 noise; known flaky test CreateOrderPaidWithCustomerCredit). A phase is green if there are no NEW failures.
+5. Finish a phase with: php artisan test --compact, the module tests, vendor/bin/pint --dirty --format agent.
+6. Docs: add an entry under [Unreleased] in CHANGELOG.md for every user-visible change, and update docs/zashpos/ZASHDINE.md when the module changes. Record any new architectural decision in docs/zashpos/DECISIONS.md.
+7. Commit, push, open a PR with: what changed, how to test, what was NOT done, open questions, test numbers.
+8. Notion: small update_content edits only. Tick finished checkboxes and add one status line under the phase (PR link, test numbers, date). Never use replace_content, never delete other content.
+9. If anything fails (push, tests, Notion) show the exact error and STOP.
+10. End with: branch names and SHAs, PR URLs, test numbers, Notion edited yes/no, anything unfinished.
+11. After a phase STOP and wait for my review. Never start the next phase on your own.

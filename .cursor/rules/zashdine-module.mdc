@@ -1,0 +1,12 @@
+---
+description: ZashDine module conventions
+globs: modules/ZashDine/**
+alwaysApply: false
+---
+- Load .agents/skills/create-nexopos-module/SKILL.md before editing the module.
+- Namespace Modules\ZashDine, route prefix zash-dine, permissions zash.dine.*, tables zash_dine_*.
+- Every migration needs a working down(). Verify with migrate:rollback.
+- Do not edit core files outside modules/ZashDine unless unavoidable; explain why in the PR.
+- Kitchen status changes run in a DB transaction with locking. Reverb events are never the only source of truth; provide a polling fallback.
+- Tests only for risky logic: routing by category, concurrent status updates, permissions.
+- After changes update docs/zashpos/ZASHDINE.md and CHANGELOG.md.
