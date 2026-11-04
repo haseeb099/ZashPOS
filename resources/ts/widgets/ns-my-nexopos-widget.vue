@@ -6,7 +6,7 @@
                     <i class="las" :class="isConnected ? 'la-check-circle' : 'la-plug'"></i>
                 </span>
                 <div class="min-w-0">
-                    <h5 class="truncate font-semibold">{{ __( 'My ZashPOS' ) }}</h5>
+                    <h5 class="truncate font-semibold">{{ __( 'My NexoPOS' ) }}</h5>
                     <p class="truncate text-xs text-fontcolor-soft">{{ isConnected ? __( 'Connected and ready' ) : __( 'Extend your store' ) }}</p>
                 </div>
             </div>
@@ -30,7 +30,7 @@
                     <span class="text-xs font-semibold uppercase tracking-wider">{{ __( 'Connected features' ) }}</span>
                 </div>
                 <h3 class="text-lg font-bold leading-6 text-fontcolor-hard">
-                    {{ __( 'Connect ZashPOS to a larger toolbox.' ) }}
+                    {{ __( 'Connect NexoPOS to a larger toolbox.' ) }}
                 </h3>
                 <p class="mt-2 text-sm leading-6 text-fontcolor-soft">
                     {{ __( 'Link this installation to my.nexopos.com to discover modules, install extensions faster, and keep your store ready for what comes next.' ) }}
@@ -40,7 +40,7 @@
             <div class="grid gap-2 text-sm">
                 <div class="flex items-start gap-2">
                     <i class="las la-check-circle mt-0.5 text-success-tertiary"></i>
-                    <span>{{ __( 'Browse the official ZashPOS marketplace from your dashboard.' ) }}</span>
+                    <span>{{ __( 'Browse the official NexoPOS marketplace from your dashboard.' ) }}</span>
                 </div>
                 <div class="flex items-start gap-2">
                     <i class="las la-check-circle mt-0.5 text-success-tertiary"></i>
@@ -52,7 +52,7 @@
                 <ns-button href="/dashboard/modules/marketplace?action=authenticate" type="info">
                     <span class="flex items-center justify-center gap-2">
                         <i class="las la-external-link-alt"></i>
-                        <span>{{ __( 'Connect to My ZashPOS' ) }}</span>
+                        <span>{{ __( 'Connect to My NexoPOS' ) }}</span>
                     </span>
                 </ns-button>
                 <ns-link href="/dashboard/modules/marketplace">
@@ -89,7 +89,7 @@
                     </span>
                 </ns-button>
                 <ns-link class="text-center text-xs text-fontcolor-soft hover:text-fontcolor" href="https://my.nexopos.com" target="_blank">
-                    {{ __( 'Open My ZashPOS' ) }}
+                    {{ __( 'Open My NexoPOS' ) }}
                 </ns-link>
             </div>
         </div>

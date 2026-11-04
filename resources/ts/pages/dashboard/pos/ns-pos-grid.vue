@@ -470,10 +470,10 @@ export default {
             POS.addToCart( product );
         },
 
-        inviteToMyZashPOSConnexion() {
+        inviteToMyNexoPOSConnexion() {
             nsNotice.info( 
                 __( 'Authentication Required' ),
-                __( 'You need to connect your installation to My ZashPOS for using websocket features.' ), {
+                __( 'You need to connect your installation to My NexoPOS for using websocket features.' ), {
                 actions: {
                     close: {
                         type: 'info',

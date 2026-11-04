@@ -16,8 +16,8 @@ class MyNexoPosWidget extends WidgetService
 
     public function __construct()
     {
-        $this->name = __( 'My ZashPOS' );
-        $this->description = __( 'Invite users to connect this installation to My ZashPOS and unlock marketplace extensions.' );
+        $this->name = __( 'My NexoPOS' );
+        $this->description = __( 'Invite users to connect this installation to My NexoPOS and unlock marketplace extensions.' );
         $this->permission = 'manage.modules';
     }
 
