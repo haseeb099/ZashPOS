@@ -1,0 +1,117 @@
+<script>
+(() => {
+    if ( typeof nsExtraComponents === 'undefined' ) {
+        return;
+    }
+
+    const labels = {
+        lastRefresh: @json( __m( 'Last refresh', 'ZashDine' ) ),
+        refreshNow: @json( __m( 'Refresh now', 'ZashDine' ) ),
+        loading: @json( __m( 'Loading floor…', 'ZashDine' ) ),
+        unable: @json( __m( 'Unable to refresh the floor view.', 'ZashDine' ) ),
+        empty: @json( __m( 'No enabled areas yet. Create an area and tables first.', 'ZashDine' ) ),
+        occupied: @json( __m( 'Occupied', 'ZashDine' ) ),
+        available: @json( __m( 'Available', 'ZashDine' ) ),
+        seats: @json( __m( 'seats', 'ZashDine' ) ),
+        order: @json( __m( 'Order', 'ZashDine' ) ),
+        total: @json( __m( 'Total', 'ZashDine' ) ),
+        noOrder: @json( __m( 'No active order', 'ZashDine' ) ),
+        noTables: @json( __m( 'No tables in this area.', 'ZashDine' ) ),
+    };
+
+    nsExtraComponents['zash-dine-floor'] = {
+        data() {
+            return {
+                areas: [],
+                refreshedAt: null,
+                loading: true,
+                error: null,
+                timer: null,
+                labels,
+            };
+        },
+        mounted() {
+            this.loadFloor();
+            this.timer = setInterval( () => this.loadFloor( false ), 5000 );
+        },
+        beforeUnmount() {
+            if ( this.timer ) {
+                clearInterval( this.timer );
+            }
+        },
+        methods: {
+            loadFloor( showLoading = true ) {
+                if ( showLoading ) {
+                    this.loading = true;
+                }
+
+                nsHttpClient.get( '/api/zash-dine/floor' ).subscribe({
+                    next: ( response ) => {
+                        this.areas = response?.data?.areas || [];
+                        this.refreshedAt = response?.data?.refreshed_at || null;
+                        this.error = null;
+                        this.loading = false;
+                    },
+                    error: ( error ) => {
+                        this.error = error?.message || labels.unable;
+                        this.loading = false;
+                    },
+                });
+            },
+            statusClass( status ) {
+                return status === 'occupied'
+                    ? 'bg-warning-tertiary text-warning-primary border-warning-primary'
+                    : 'bg-success-tertiary text-success-primary border-success-primary';
+            },
+            statusLabel( status ) {
+                return status === 'occupied' ? labels.occupied : labels.available;
+            },
+        },
+        template: `
+            <div class="space-y-6">
+                <div class="flex items-center justify-between gap-3 flex-wrap">
+                    <p class="text-xs text-fontcolor-soft" v-if="refreshedAt">
+                        @{{ labels.lastRefresh }}: @{{ refreshedAt }}
+                    </p>
+                    <button type="button" class="rounded px-3 py-1 text-sm bg-info-tertiary text-info-primary" v-on:click="loadFloor()">
+                        @{{ labels.refreshNow }}
+                    </button>
+                </div>
+
+                <div v-if="loading" class="text-sm text-fontcolor-soft">@{{ labels.loading }}</div>
+                <div v-else-if="error" class="text-sm text-error-primary">@{{ error }}</div>
+                <div v-else-if="!areas.length" class="text-sm text-fontcolor-soft">@{{ labels.empty }}</div>
+
+                <div v-else class="space-y-8">
+                    <section v-for="area in areas" :key="area.id" class="space-y-3">
+                        <h3 class="text-lg font-semibold text-fontcolor">@{{ area.name }}</h3>
+                        <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                            <article
+                                v-for="table in area.tables"
+                                :key="table.id"
+                                class="rounded border p-4 bg-box-background border-box-edge"
+                            >
+                                <div class="flex items-start justify-between gap-2">
+                                    <div>
+                                        <h4 class="font-semibold text-fontcolor">@{{ table.name }}</h4>
+                                        <p class="text-xs text-fontcolor-soft">@{{ table.seats }} @{{ labels.seats }}</p>
+                                    </div>
+                                    <span class="text-xs px-2 py-1 rounded border" :class="statusClass( table.status )">
+                                        @{{ statusLabel( table.status ) }}
+                                    </span>
+                                </div>
+                                <div class="mt-3 text-sm text-fontcolor-soft" v-if="table.order">
+                                    <p>@{{ labels.order }}: @{{ table.order.code }}</p>
+                                    <p>@{{ labels.total }}: @{{ table.order.total }}</p>
+                                </div>
+                                <div class="mt-3 text-sm text-fontcolor-soft" v-else>@{{ labels.noOrder }}</div>
+                            </article>
+                        </div>
+                        <p v-if="!area.tables.length" class="text-sm text-fontcolor-soft">@{{ labels.noTables }}</p>
+                    </section>
+                </div>
+            </div>
+        `,
+    };
+})();
+</script>
