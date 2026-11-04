@@ -1,0 +1,10 @@
+<?xml version="1.0" ?>
+<module>
+    <namespace>ZashDine</namespace>
+    <version>1.0</version>
+    <author>ZashPOS</author>
+    <name>ZashDine</name>
+    <description>
+        <locale lang="en">Restaurant dine-in module for ZashPOS (tables, kitchens, modifiers).</locale>
+    </description>
+</module>
