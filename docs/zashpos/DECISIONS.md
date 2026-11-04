@@ -10,6 +10,7 @@
 | D-006 | One instance per client, no multi-tenancy for now | Simplest to ship |
 | D-007 | ZashMarket is a separate Laravel app, built after client #1 | Avoid premature work |
 | D-008 | Tests only for risky logic; the rest is manual QA | Speed |
+| D-009 | Cancel meal removes the product from unpaid dine-in orders via `OrderProduct::delete` + `OrdersService::refreshOrder` + stock return (same as order-update `__deleteUntrackedProducts`), not `deleteOrderProduct` | Core `OrderBeforeDeleteProductEvent` uses Bus `Dispatchable` and fatals; keep honest bill behaviour without a core edit |
 
 ## How to add a decision
 Add a row with the next ID, the decision and the reason.

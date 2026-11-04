@@ -5,21 +5,19 @@ use Illuminate\Database\Migrations\Migration;
 
 return new class extends Migration
 {
+    /**
+     * Core defaults from App\Services\Options::setupDefaultOptions().
+     *
+     * @var array<int, string>
+     */
+    private const CORE_DEFAULTS = ['takeaway', 'delivery'];
+
     public function up(): void
     {
-        $option = Option::where( 'key', 'ns_pos_order_types' )->first();
+        $types = $this->currentTypes();
 
-        $types = [];
-
-        if ( $option ) {
-            $value = $option->value;
-
-            if ( is_string( $value ) ) {
-                $decoded = json_decode( $value, true );
-                $types = is_array( $decoded ) ? $decoded : [];
-            } elseif ( is_array( $value ) ) {
-                $types = $value;
-            }
+        if ( $types === [] ) {
+            $types = self::CORE_DEFAULTS;
         }
 
         if ( ! in_array( 'dine-in', $types, true ) ) {
@@ -31,27 +29,43 @@ return new class extends Migration
 
     public function down(): void
     {
-        $option = Option::where( 'key', 'ns_pos_order_types' )->first();
-
-        if ( ! $option ) {
-            return;
-        }
-
-        $value = $option->value;
-        $types = [];
-
-        if ( is_string( $value ) ) {
-            $decoded = json_decode( $value, true );
-            $types = is_array( $decoded ) ? $decoded : [];
-        } elseif ( is_array( $value ) ) {
-            $types = $value;
-        }
-
         $types = array_values( array_filter(
-            $types,
+            $this->currentTypes(),
             static fn ( $type ) => $type !== 'dine-in'
         ) );
 
+        if ( $types === [] ) {
+            $types = self::CORE_DEFAULTS;
+        }
+
         ns()->option->set( 'ns_pos_order_types', $types );
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function currentTypes(): array
+    {
+        $option = Option::where( 'key', 'ns_pos_order_types' )->first();
+
+        if ( ! $option ) {
+            $fromService = ns()->option->get( 'ns_pos_order_types' );
+
+            return is_array( $fromService ) ? array_values( $fromService ) : [];
+        }
+
+        $value = $option->value;
+
+        if ( is_string( $value ) && $value !== '' ) {
+            $decoded = json_decode( $value, true );
+
+            return is_array( $decoded ) ? array_values( $decoded ) : [];
+        }
+
+        if ( is_array( $value ) ) {
+            return array_values( $value );
+        }
+
+        return [];
     }
 };

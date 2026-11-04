@@ -18,15 +18,17 @@ areas, tables, kitchens, kitchen_categories, order_items, modifier_groups, modif
 - Settings: existing ZashDine settings page
 
 ## POS dine-in
-- Order type identifier: `dine-in` (enabled in `ns_pos_order_types`)
+- Order type identifier: `dine-in` (enabled in `ns_pos_order_types`; core defaults are `takeaway` + `delivery`)
 - Requires `zash_dine_table_id` on the order payload
-- On create: locks the table (`lockForUpdate`), sets `current_order_id` + `occupied`, writes `zash_dine_order_items`
+- Pre-check + locked assign: occupancy is rejected in `OrderAfterCheckPerformedEvent` and again under `lockForUpdate` inside `OrdersService::create()`'s transaction (rejection rolls back the order and stock)
+- On create: sets `current_order_id` + `occupied`, writes `zash_dine_order_items`
+- On update (`OrderAfterUpdatedEvent`): new products get pending `zash_dine_order_items`; removed products mark their row cancelled (already-cancelled rows stay cancelled)
 - Rejects a second order on an occupied table
-- Frees the table when the order is paid, voided, or deleted
+- Frees the table when the order is paid, voided, or deleted (partially paid keeps the table occupied)
 
 ## Waiter APIs
-- `POST /api/zash-dine/order-items/{id}/cancel`
-- `PUT /api/zash-dine/order-items/{id}/note` body `{ "note": "..." }`
+- `POST /api/zash-dine/order-items/{id}/cancel` — cancels the kitchen row **and** removes the product from an unpaid/active order (total via `OrdersService::refreshOrder`, stock return via `ProductService::stockAdjustment`, same path as order-update `__deleteUntrackedProducts`). Blocked when the order is no longer on the floor (paid/void/freed). Note: core `OrdersService::deleteOrderProduct` is currently unusable (`OrderBeforeDeleteProductEvent` uses Bus `Dispatchable`).
+- `PUT /api/zash-dine/order-items/{id}/note` body `{ "note": "..." }` — same active-order guard
 - `GET /api/zash-dine/tables/available`
 
 ## Scope by phase

@@ -20,7 +20,7 @@ class OrderItemsController extends Controller
         $item = $this->dineInTableService->cancelOrderItem( $orderItem );
 
         return JsonResponse::success(
-            __m( 'The meal was cancelled.', 'ZashDine' ),
+            __m( 'The meal was cancelled and removed from the unpaid order.', 'ZashDine' ),
             ['item' => $item]
         );
     }

@@ -2,6 +2,10 @@
 
 namespace Modules\ZashDine\Tests\Feature;
 
+use App\Models\Order;
+use App\Models\OrderProduct;
+use App\Models\Product;
+use App\Models\ProductUnitQuantity;
 use App\Models\Role;
 use App\Models\User;
 use App\Services\ModulesService;
@@ -63,12 +67,42 @@ final class ZashDineDineInOrderTest extends TestCase
         [$table] = $this->createAvailableTable();
         $this->shouldMakePayment = false;
 
-        $this->processOrders( [
+        $product = Product::notGrouped()
+            ->notInGroup()
+            ->with( 'unit_quantities' )
+            ->firstOrFail();
+        $unitQuantity = $product->unit_quantities->firstOrFail();
+        $unitQuantity->quantity = 500;
+        $unitQuantity->save();
+
+        $productLine = [
+            'product_id' => $product->id,
+            'name' => $product->name,
+            'quantity' => 2,
+            'unit_price' => $unitQuantity->sale_price,
+            'unit_quantity_id' => $unitQuantity->id,
+            'unit_id' => $unitQuantity->unit_id,
+            'discount' => 0,
+            'discount_type' => 'percentage',
+            'discount_percentage' => 0,
+            'tax_type' => 'inclusive',
+            'tax_group_id' => 1,
+        ];
+
+        $first = $this->processOrders( [
             'type' => ['identifier' => DineInTableService::ORDER_TYPE],
             DineInTableService::TABLE_FIELD => $table->id,
+            'products' => [$productLine],
             'coupons' => [],
             'payments' => [],
         ] );
+
+        $firstOrderId = $first[0]['order-creation']['data']['order']['id'];
+
+        $ordersBefore = Order::query()->count();
+        $stockBefore = (float) ProductUnitQuantity::query()
+            ->where( 'product_id', $product->id )
+            ->sum( 'quantity' );
 
         $table->refresh();
         $this->assertTrue( $table->isOccupied() );
@@ -76,6 +110,7 @@ final class ZashDineDineInOrderTest extends TestCase
         $this->processOrders( [
             'type' => ['identifier' => DineInTableService::ORDER_TYPE],
             DineInTableService::TABLE_FIELD => $table->id,
+            'products' => [$productLine],
             'coupons' => [],
             'payments' => [],
         ], function ( $response ) {
@@ -85,6 +120,14 @@ final class ZashDineDineInOrderTest extends TestCase
                 (string) $response->json( 'message' )
             );
         } );
+
+        $this->assertSame( $ordersBefore, Order::query()->count() );
+        $this->assertSame( 1, Order::query()->whereKey( $firstOrderId )->count() );
+
+        $stockAfter = (float) ProductUnitQuantity::query()
+            ->where( 'product_id', $product->id )
+            ->sum( 'quantity' );
+        $this->assertSame( $stockBefore, $stockAfter );
     }
 
     public function test_table_is_freed_when_order_is_paid(): void
@@ -141,6 +184,168 @@ final class ZashDineDineInOrderTest extends TestCase
         $tableB->refresh();
         $this->assertNull( $tableB->current_order_id );
         $this->assertSame( DiningTable::STATUS_AVAILABLE, $tableB->status );
+    }
+
+    public function test_order_update_syncs_dine_in_order_items(): void
+    {
+        [$table] = $this->createAvailableTable();
+        $this->shouldMakePayment = false;
+
+        $responses = $this->processOrders( [
+            'type' => ['identifier' => DineInTableService::ORDER_TYPE],
+            DineInTableService::TABLE_FIELD => $table->id,
+            'coupons' => [],
+            'payments' => [],
+        ] );
+
+        $orderData = $responses[0]['order-creation']['data']['order'];
+        $order = Order::query()->with( 'products' )->findOrFail( $orderData['id'] );
+        $originalItem = OrderItem::query()->where( 'order_id', $order->id )->firstOrFail();
+        $originalProductId = $originalItem->order_product_id;
+
+        $extraProduct = Product::notGrouped()
+            ->notInGroup()
+            ->where( 'id', '!=', $order->products->first()->product_id )
+            ->with( 'unit_quantities' )
+            ->firstOrFail();
+
+        $extraUnit = $extraProduct->unit_quantities->first();
+        $extraUnit->quantity = max( (float) $extraUnit->quantity, 50 );
+        $extraUnit->save();
+
+        $payload = $orderData;
+        $payload['type'] = ['identifier' => DineInTableService::ORDER_TYPE];
+        $payload[DineInTableService::TABLE_FIELD] = $table->id;
+        $payload['coupons'] = [];
+        $payload['payments'] = [];
+        $payload['products'] = collect( $orderData['products'] )
+            ->map( function ( $product ) {
+                return [
+                    'id' => $product['id'],
+                    'product_id' => $product['product_id'],
+                    'name' => $product['name'],
+                    'quantity' => $product['quantity'],
+                    'unit_price' => $product['unit_price'],
+                    'unit_quantity_id' => $product['unit_quantity_id'],
+                    'unit_id' => $product['unit_id'],
+                    'discount' => $product['discount'] ?? 0,
+                    'discount_type' => $product['discount_type'] ?? 'percentage',
+                    'discount_percentage' => $product['discount_percentage'] ?? 0,
+                    'tax_type' => $product['tax_type'] ?? 'inclusive',
+                    'tax_group_id' => $product['tax_group_id'] ?? null,
+                ];
+            } )
+            ->push( [
+                'product_id' => $extraProduct->id,
+                'name' => $extraProduct->name,
+                'quantity' => 1,
+                'unit_price' => $extraUnit->sale_price,
+                'unit_quantity_id' => $extraUnit->id,
+                'unit_id' => $extraUnit->unit_id,
+                'discount' => 0,
+                'discount_type' => 'percentage',
+                'discount_percentage' => 0,
+                'tax_type' => 'inclusive',
+            ] )
+            ->values()
+            ->all();
+
+        $this->json( 'PUT', 'api/orders/' . $order->id, $payload )->assertOk();
+
+        $this->assertTrue(
+            OrderItem::query()
+                ->where( 'order_id', $order->id )
+                ->where( 'status', OrderItem::STATUS_PENDING )
+                ->whereHas( 'orderProduct', fn ( $query ) => $query->where( 'product_id', $extraProduct->id ) )
+                ->exists()
+        );
+
+        $order->refresh()->load( 'products' );
+        $remaining = $order->products->firstWhere( 'product_id', $extraProduct->id );
+        $this->assertNotNull( $remaining );
+
+        $payload['products'] = [[
+            'id' => $remaining->id,
+            'product_id' => $remaining->product_id,
+            'name' => $remaining->name,
+            'quantity' => $remaining->quantity,
+            'unit_price' => $remaining->unit_price,
+            'unit_quantity_id' => $remaining->unit_quantity_id,
+            'unit_id' => $remaining->unit_id,
+            'discount' => $remaining->discount ?? 0,
+            'discount_type' => $remaining->discount_type ?? 'percentage',
+            'discount_percentage' => $remaining->discount_percentage ?? 0,
+            'tax_type' => $remaining->tax_type ?? 'inclusive',
+            'tax_group_id' => $remaining->tax_group_id,
+        ]];
+
+        $this->json( 'PUT', 'api/orders/' . $order->id, $payload )->assertOk();
+
+        $this->assertDatabaseHas( 'zash_dine_order_items', [
+            'order_id' => $order->id,
+            'order_product_id' => $originalProductId,
+            'status' => OrderItem::STATUS_CANCELLED,
+        ] );
+    }
+
+    public function test_cancel_meal_removes_product_from_unpaid_order_and_lowers_total(): void
+    {
+        [$table] = $this->createAvailableTable();
+        $this->shouldMakePayment = false;
+
+        $responses = $this->processOrders( [
+            'type' => ['identifier' => DineInTableService::ORDER_TYPE],
+            DineInTableService::TABLE_FIELD => $table->id,
+            'coupons' => [],
+            'payments' => [],
+        ] );
+
+        $orderId = $responses[0]['order-creation']['data']['order']['id'];
+        $order = Order::query()->findOrFail( $orderId );
+        $totalBefore = (float) $order->total;
+        $item = OrderItem::query()->where( 'order_id', $orderId )->firstOrFail();
+        $orderProductId = $item->order_product_id;
+
+        $this->json( 'POST', 'api/zash-dine/order-items/' . $item->id . '/cancel' )
+            ->assertOk();
+
+        $this->assertDatabaseHas( 'zash_dine_order_items', [
+            'id' => $item->id,
+            'status' => OrderItem::STATUS_CANCELLED,
+        ] );
+        $this->assertFalse(
+            OrderProduct::query()->whereKey( $orderProductId )->exists()
+        );
+
+        $order->refresh();
+        $this->assertLessThan( $totalBefore, (float) $order->total );
+    }
+
+    public function test_meal_actions_are_blocked_when_order_is_no_longer_active(): void
+    {
+        [$table] = $this->createAvailableTable();
+        $this->shouldMakePayment = false;
+
+        $responses = $this->processOrders( [
+            'type' => ['identifier' => DineInTableService::ORDER_TYPE],
+            DineInTableService::TABLE_FIELD => $table->id,
+            'coupons' => [],
+            'payments' => [],
+        ] );
+
+        $orderId = $responses[0]['order-creation']['data']['order']['id'];
+        $item = OrderItem::query()->where( 'order_id', $orderId )->firstOrFail();
+
+        $this->json( 'POST', 'api/orders/' . $orderId . '/void', [
+            'reason' => 'Close before meal action',
+        ] )->assertOk();
+
+        $this->json( 'PUT', 'api/zash-dine/order-items/' . $item->id . '/note', [
+            'note' => 'Too late',
+        ] )->assertStatus( 403 );
+
+        $this->json( 'POST', 'api/zash-dine/order-items/' . $item->id . '/cancel' )
+            ->assertStatus( 403 );
     }
 
     public function test_waiter_permission_is_enforced_for_meal_actions(): void

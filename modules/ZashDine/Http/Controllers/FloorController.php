@@ -28,60 +28,70 @@ class FloorController extends DashboardController
                 },
             ] )
             ->orderBy( 'name' )
-            ->get()
-            ->map( function ( Area $area ) {
-                return [
-                    'id' => $area->id,
-                    'name' => $area->name,
-                    'tables' => $area->tables->map( function ( DiningTable $table ) {
-                        $order = $table->currentOrder;
+            ->get();
 
-                        $items = [];
+        $orderIds = $areas
+            ->flatMap( fn ( Area $area ) => $area->tables )
+            ->pluck( 'current_order_id' )
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
 
-                        if ( $table->current_order_id ) {
-                            $items = OrderItem::query()
-                                ->where( 'order_id', $table->current_order_id )
-                                ->where( 'table_id', $table->id )
-                                ->with( 'orderProduct:id,name,quantity' )
-                                ->orderBy( 'id' )
-                                ->get()
-                                ->map( function ( OrderItem $item ) {
-                                    return [
-                                        'id' => $item->id,
-                                        'status' => $item->status,
-                                        'note' => $item->note,
-                                        'name' => $item->orderProduct?->name,
-                                        'quantity' => $item->orderProduct?->quantity,
-                                    ];
-                                } )
-                                ->values();
-                        }
+        $itemsByTableId = collect();
 
-                        return [
-                            'id' => $table->id,
-                            'name' => $table->name,
-                            'seats' => (int) $table->seats,
-                            'status' => $table->isOccupied()
-                                ? DiningTable::STATUS_OCCUPIED
-                                : DiningTable::STATUS_AVAILABLE,
-                            'current_order_id' => $table->current_order_id,
-                            'order' => $order ? [
-                                'id' => $order->id,
-                                'code' => $order->code,
-                                'total' => $order->total,
-                                'payment_status' => $order->payment_status,
-                            ] : null,
-                            'items' => $items,
-                        ];
-                    } )->values(),
-                ];
-            } )
-            ->values();
+        if ( $orderIds !== [] ) {
+            $itemsByTableId = OrderItem::query()
+                ->whereIn( 'order_id', $orderIds )
+                ->with( 'orderProduct:id,name,quantity' )
+                ->orderBy( 'id' )
+                ->get()
+                ->groupBy( 'table_id' );
+        }
+
+        $payload = $areas->map( function ( Area $area ) use ( $itemsByTableId ) {
+            return [
+                'id' => $area->id,
+                'name' => $area->name,
+                'tables' => $area->tables->map( function ( DiningTable $table ) use ( $itemsByTableId ) {
+                    $order = $table->currentOrder;
+
+                    $items = ( $itemsByTableId->get( $table->id ) ?? collect() )
+                        ->map( function ( OrderItem $item ) {
+                            return [
+                                'id' => $item->id,
+                                'status' => $item->status,
+                                'note' => $item->note,
+                                'name' => $item->orderProduct?->name,
+                                'quantity' => $item->orderProduct?->quantity,
+                            ];
+                        } )
+                        ->values();
+
+                    return [
+                        'id' => $table->id,
+                        'name' => $table->name,
+                        'seats' => (int) $table->seats,
+                        'status' => $table->isOccupied()
+                            ? DiningTable::STATUS_OCCUPIED
+                            : DiningTable::STATUS_AVAILABLE,
+                        'current_order_id' => $table->current_order_id,
+                        'order' => $order ? [
+                            'id' => $order->id,
+                            'code' => $order->code,
+                            'total' => $order->total,
+                            'payment_status' => $order->payment_status,
+                        ] : null,
+                        'items' => $items,
+                    ];
+                } )->values(),
+            ];
+        } )->values();
 
         return [
             'status' => 'success',
             'data' => [
-                'areas' => $areas,
+                'areas' => $payload,
                 'refreshed_at' => now()->toIso8601String(),
             ],
         ];

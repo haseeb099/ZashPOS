@@ -14,6 +14,6 @@ class OrderAfterCheckPerformedEventListener
 
     public function handle( OrderAfterCheckPerformedEvent $event ): void
     {
-        $this->dineInTableService->assertDineInCanProceed( $event->fields );
+        $this->dineInTableService->assertDineInCanProceed( $event->fields, $event->order );
     }
 }
