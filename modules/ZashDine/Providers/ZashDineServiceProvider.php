@@ -29,7 +29,7 @@ class ZashDineServiceProvider extends ServiceProvider
                 label: __m( 'ZashDine', 'ZashDine' ),
                 identifier: 'zash-dine',
                 icon: 'la-utensils',
-                permissions: ['zash.dine.manage'],
+                permissions: ['zash.dine.manage', 'zash.dine.waiter'],
                 childrens: AsideMenu::childrens(
                     AsideMenu::subMenu(
                         label: __m( 'Areas', 'ZashDine' ),
@@ -47,7 +47,7 @@ class ZashDineServiceProvider extends ServiceProvider
                         label: __m( 'Floor', 'ZashDine' ),
                         identifier: 'zash-dine-floor',
                         href: ns()->route( 'zash-dine.floor' ),
-                        permissions: ['zash.dine.manage']
+                        permissions: ['zash.dine.waiter', 'zash.dine.manage']
                     ),
                     AsideMenu::subMenu(
                         label: __m( 'Settings', 'ZashDine' ),
