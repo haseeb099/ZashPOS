@@ -238,7 +238,7 @@ final class ZashDineAreasTablesCrudTest extends TestCase
     }
 
     /**
-     * @param  array<int, string> $permissions
+     * @param array<int, string> $permissions
      */
     private function createUserWithZashDinePermissions( array $permissions ): User
     {

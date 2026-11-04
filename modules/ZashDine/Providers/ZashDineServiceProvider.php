@@ -24,6 +24,17 @@ class ZashDineServiceProvider extends ServiceProvider
             };
         } );
 
+        Hook::addFilter( 'ns-orders-types', function ( array $types ) {
+            $types['dine-in'] = [
+                'identifier' => 'dine-in',
+                'label' => __m( 'Dine-in', 'ZashDine' ),
+                'icon' => asset( 'images/groceries.png' ),
+                'selected' => false,
+            ];
+
+            return $types;
+        } );
+
         Hook::addFilter( 'ns-dashboard-menus', function ( array $menus ) {
             $zashDineMenu = AsideMenu::menu(
                 label: __m( 'ZashDine', 'ZashDine' ),

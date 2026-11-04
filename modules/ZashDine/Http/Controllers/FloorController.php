@@ -6,6 +6,7 @@ use App\Http\Controllers\DashboardController;
 use Illuminate\Support\Facades\View;
 use Modules\ZashDine\Models\Area;
 use Modules\ZashDine\Models\DiningTable;
+use Modules\ZashDine\Models\OrderItem;
 
 class FloorController extends DashboardController
 {
@@ -35,6 +36,27 @@ class FloorController extends DashboardController
                     'tables' => $area->tables->map( function ( DiningTable $table ) {
                         $order = $table->currentOrder;
 
+                        $items = [];
+
+                        if ( $table->current_order_id ) {
+                            $items = OrderItem::query()
+                                ->where( 'order_id', $table->current_order_id )
+                                ->where( 'table_id', $table->id )
+                                ->with( 'orderProduct:id,name,quantity' )
+                                ->orderBy( 'id' )
+                                ->get()
+                                ->map( function ( OrderItem $item ) {
+                                    return [
+                                        'id' => $item->id,
+                                        'status' => $item->status,
+                                        'note' => $item->note,
+                                        'name' => $item->orderProduct?->name,
+                                        'quantity' => $item->orderProduct?->quantity,
+                                    ];
+                                } )
+                                ->values();
+                        }
+
                         return [
                             'id' => $table->id,
                             'name' => $table->name,
@@ -49,6 +71,7 @@ class FloorController extends DashboardController
                                 'total' => $order->total,
                                 'payment_status' => $order->payment_status,
                             ] : null,
+                            'items' => $items,
                         ];
                     } )->values(),
                 ];

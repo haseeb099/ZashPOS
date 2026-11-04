@@ -4,6 +4,8 @@ use App\Http\Middleware\NsRestrictAnyMiddleware;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Support\Facades\Route;
 use Modules\ZashDine\Http\Controllers\FloorController;
+use Modules\ZashDine\Http\Controllers\OrderItemsController;
+use Modules\ZashDine\Http\Controllers\TablesController;
 
 Route::middleware( [
     SubstituteBindings::class,
@@ -11,4 +13,10 @@ Route::middleware( [
     NsRestrictAnyMiddleware::class . ':zash.dine.waiter,zash.dine.manage',
 ] )->prefix( 'zash-dine' )->group( function () {
     Route::get( 'floor', [FloorController::class, 'status'] )->name( 'zash-dine.api.floor' );
+    Route::get( 'tables/available', [TablesController::class, 'available'] )->name( 'zash-dine.api.tables.available' );
+
+    Route::post( 'order-items/{orderItem}/cancel', [OrderItemsController::class, 'cancel'] )
+        ->name( 'zash-dine.api.order-items.cancel' );
+    Route::put( 'order-items/{orderItem}/note', [OrderItemsController::class, 'updateNote'] )
+        ->name( 'zash-dine.api.order-items.note' );
 } );

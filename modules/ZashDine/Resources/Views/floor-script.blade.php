@@ -17,6 +17,14 @@
         total: @json( __m( 'Total', 'ZashDine' ) ),
         noOrder: @json( __m( 'No active order', 'ZashDine' ) ),
         noTables: @json( __m( 'No tables in this area.', 'ZashDine' ) ),
+        meals: @json( __m( 'Meals', 'ZashDine' ) ),
+        cancelMeal: @json( __m( 'Cancel meal', 'ZashDine' ) ),
+        addNote: @json( __m( 'Add note', 'ZashDine' ) ),
+        notePrompt: @json( __m( 'Note for this meal', 'ZashDine' ) ),
+        cancelled: @json( __m( 'Cancelled', 'ZashDine' ) ),
+        noteSaved: @json( __m( 'Note saved.', 'ZashDine' ) ),
+        mealCancelled: @json( __m( 'Meal cancelled.', 'ZashDine' ) ),
+        confirmCancel: @json( __m( 'Cancel this meal?', 'ZashDine' ) ),
     };
 
     nsExtraComponents['zash-dine-floor'] = {
@@ -66,6 +74,46 @@
             statusLabel( status ) {
                 return status === 'occupied' ? labels.occupied : labels.available;
             },
+            cancelMeal( item ) {
+                if ( item.status === 'cancelled' ) {
+                    return;
+                }
+
+                if ( ! window.confirm( labels.confirmCancel ) ) {
+                    return;
+                }
+
+                nsHttpClient.post( `/api/zash-dine/order-items/${item.id}/cancel` ).subscribe({
+                    next: () => {
+                        nsSnackBar.success( labels.mealCancelled );
+                        this.loadFloor( false );
+                    },
+                    error: ( error ) => {
+                        nsSnackBar.error( error?.message || labels.unable );
+                    },
+                });
+            },
+            addNote( item ) {
+                if ( item.status === 'cancelled' ) {
+                    return;
+                }
+
+                const note = window.prompt( labels.notePrompt, item.note || '' );
+
+                if ( note === null ) {
+                    return;
+                }
+
+                nsHttpClient.put( `/api/zash-dine/order-items/${item.id}/note`, { note } ).subscribe({
+                    next: () => {
+                        nsSnackBar.success( labels.noteSaved );
+                        this.loadFloor( false );
+                    },
+                    error: ( error ) => {
+                        nsSnackBar.error( error?.message || labels.unable );
+                    },
+                });
+            },
         },
         template: `
             <div class="space-y-6">
@@ -105,6 +153,25 @@
                                     <p>@{{ labels.total }}: @{{ table.order.total }}</p>
                                 </div>
                                 <div class="mt-3 text-sm text-fontcolor-soft" v-else>@{{ labels.noOrder }}</div>
+
+                                <div class="mt-4 space-y-2" v-if="table.items && table.items.length">
+                                    <p class="text-xs font-semibold text-fontcolor">@{{ labels.meals }}</p>
+                                    <div
+                                        v-for="item in table.items"
+                                        :key="item.id"
+                                        class="rounded border border-box-edge p-2 text-xs text-fontcolor-soft"
+                                    >
+                                        <p class="text-fontcolor">
+                                            @{{ item.quantity }} × @{{ item.name || ('#' + item.id) }}
+                                            <span v-if="item.status === 'cancelled'">(@{{ labels.cancelled }})</span>
+                                        </p>
+                                        <p v-if="item.note">@{{ item.note }}</p>
+                                        <div class="mt-2 flex gap-2" v-if="item.status !== 'cancelled'">
+                                            <button type="button" class="underline" v-on:click="addNote( item )">@{{ labels.addNote }}</button>
+                                            <button type="button" class="underline text-error-primary" v-on:click="cancelMeal( item )">@{{ labels.cancelMeal }}</button>
+                                        </div>
+                                    </div>
+                                </div>
                             </article>
                         </div>
                         <p v-if="!area.tables.length" class="text-sm text-fontcolor-soft">@{{ labels.noTables }}</p>
