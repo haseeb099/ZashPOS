@@ -168,7 +168,7 @@ class SetupService
         ] );
 
         /**
-         * NexoPOS uses Sanctum, we're making sure to publish the package.
+         * ZashPOS uses Sanctum, we're making sure to publish the package.
          */
         Artisan::call( 'vendor:publish', [
             '--force' => true,
@@ -247,7 +247,7 @@ class SetupService
 
         return [
             'status' => 'success',
-            'message' => __( 'NexoPOS has been successfully installed.' ),
+            'message' => __( 'ZashPOS has been successfully installed.' ),
         ];
     }
 

@@ -38,7 +38,7 @@ class GuideService
     protected UserOptions $userOptions;
 
     /**
-     * Allows NexoPOS to override the permission mechanism if necessary.
+     * Allows ZashPOS to override the permission mechanism if necessary.
      */
     protected ?Closure $permissionChecker = null;
 
@@ -232,7 +232,7 @@ class GuideService
     }
 
     /**
-     * Determine whether NexoPOS should offer an experience to the user.
+     * Determine whether ZashPOS should offer an experience to the user.
      *
      * A new experience version becomes available again automatically.
      */
@@ -1120,7 +1120,7 @@ class GuideService
     /**
      * Actual permission resolver.
      *
-     * This method is intentionally isolated so NexoPOS can use its own
+     * This method is intentionally isolated so ZashPOS can use its own
      * permission system without modifying the rest of the service.
      */
     protected function userCan(

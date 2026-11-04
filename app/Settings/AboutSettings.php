@@ -15,7 +15,7 @@ class AboutSettings extends SettingsPage
 
     /**
      * A unique identifier provided to the form,
-     * that helps NexoPOS distinguish it among other forms.
+     * that helps ZashPOS distinguish it among other forms.
      */
     const IDENTIFIER = 'about';
 

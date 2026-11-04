@@ -56,7 +56,7 @@
                         <div>
                             <h4 class="text-sm font-medium text-fontcolor">{{ __( 'Socket Features' ) }}</h4>
                             <p class="mt-1 text-xs leading-5 text-fontcolor-soft">
-                                {{ __( 'These are useful to use the Barcode Scanner Utility on NexoPOS.' ) }}
+                                {{ __( 'These are useful to use the Barcode Scanner Utility on ZashPOS.' ) }}
                             </p>
                         </div>
                     </div>

@@ -144,7 +144,7 @@ class TransactionService
             $reflection->delete();
 
             /**
-             * We'll instruct NexoPOS to perform
+             * We'll instruct ZashPOS to perform
              * a backend jobs to update the report.
              */
             ShouldRefreshReportEvent::dispatch( $transactionHistory->created_at );
@@ -1176,7 +1176,7 @@ class TransactionService
             ];
         } else {
             $warningMessage = sprintf(
-                __( 'Some expense type are disabled as NexoPOS is not able to <a target="_blank" href="%s">perform asynchronous requests</a>.' ),
+                __( 'Some expense type are disabled as ZashPOS is not able to <a target="_blank" href="%s">perform asynchronous requests</a>.' ),
                 'https://my.nexopos.com/en/documentation/troubleshooting/workers-or-async-requests-disabled'
             );
         }

@@ -1,8 +1,9 @@
 {
-    "name": "blair2004/nexopos",
+    "name": "haseeb099/zashpos",
     "type": "project",
-    "description": "The Free Modern Point Of Sale System build with Laravel, TailwindCSS and Vue.js.",
+    "description": "ZashPOS \u2014 Point Of Sale System based on NexoPOS. Built with Laravel, TailwindCSS and Vue.js.",
     "keywords": [
+        "zashpos",
         "nexopos",
         "point of sale",
         "pos",

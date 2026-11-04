@@ -6,15 +6,15 @@
             <div class="flex justify-center items-center py-6">
                 @if ( ! ns()->option->get( 'ns_store_square_logo', false ) )
                 <a href="https://my.nexopos.com" target="_blank">
-                    <img class="w-32" src="{{ asset( 'svg/nexopos-variant-1.svg' ) }}" alt="NexoPOS">
+                    <img class="w-32" src="{{ asset( 'svg/zashpos-variant-1.svg' ) }}" alt="ZashPOS">
                 </a>
                 @else
-                <img class="w-[200px]" src="{{ ns()->option->get( 'ns_store_square_logo' ) }}" alt="NexoPOS">
+                <img class="w-[200px]" src="{{ ns()->option->get( 'ns_store_square_logo' ) }}" alt="ZashPOS">
                 @endif
             </div>
             <div class="ns-box rounded shadow w-full md:w-2/5 lg:w-2/5 overflow-hidden">
                 <div id="section-header" class="ns-box-header p-4">
-                    <p class="text-center b-8 text-sm">{{ __( "If you see this page, this means NexoPOS is correctly installed on your system. As this page is meant to be the frontend, NexoPOS doesn't have a frontend for the meantime. This page shows useful links that will take you to the important resources." ) }}</p>
+                    <p class="text-center b-8 text-sm">{{ __( "If you see this page, this means ZashPOS is correctly installed on your system. As this page is meant to be the frontend, ZashPOS doesn't have a frontend for the meantime. This page shows useful links that will take you to the important resources." ) }}</p>
                 </div>
                 <div class="ns-box-footer flex shadow border-t">
                     <div class="flex w-1/3"><a class="link text-sm w-full py-2 text-center" href="{{ ns()->route( 'ns.dashboard.home' ) }}">{{ __( 'Dashboard' ) }}</a></div>

@@ -12,7 +12,7 @@ class UpdateSettingsTool extends AuthorizedTool
 
     public string $name = 'update_settings';
 
-    public string $description = 'Updates NexoPOS configuration settings via ns()->option->set(key, value).';
+    public string $description = 'Updates ZashPOS configuration settings via ns()->option->set(key, value).';
 
     public function schema( JsonSchema $schema ): array
     {

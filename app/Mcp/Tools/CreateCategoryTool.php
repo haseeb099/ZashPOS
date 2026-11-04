@@ -13,7 +13,7 @@ class CreateCategoryTool extends AuthorizedTool
 
     public string $name = 'create_product_category';
 
-    public string $description = 'Create a new product category in NexoPOS.';
+    public string $description = 'Create a new product category in ZashPOS.';
 
     public function schema( JsonSchema $schema ): array
     {

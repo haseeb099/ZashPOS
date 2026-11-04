@@ -7,7 +7,7 @@ $storeAdmin = Role::firstOrNew( [ 'namespace' => 'nexopos.store.administrator' ]
 $storeAdmin->name = __( 'Store Administrator' );
 $storeAdmin->namespace = 'nexopos.store.administrator';
 $storeAdmin->locked = true;
-$storeAdmin->description = __( 'Has a control over an entire store of NexoPOS.' );
+$storeAdmin->description = __( 'Has a control over an entire store of ZashPOS.' );
 $storeAdmin->save();
 
 $storeAdmin->addPermissions( [ 'read.dashboard' ] );

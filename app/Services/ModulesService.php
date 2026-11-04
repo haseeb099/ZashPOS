@@ -499,7 +499,7 @@ class ModulesService
 
                 throw new ModuleVersionMismatchException( __(
                     sprintf(
-                        __( 'The module "%s" has been disabled as it\'s not compatible with the current version of NexoPOS %s, but requires %s. ' ),
+                        __( 'The module "%s" has been disabled as it\'s not compatible with the current version of ZashPOS %s, but requires %s. ' ),
                         $module[ 'name' ],
                         config( 'nexopos.version' ),
                         $module[ 'core' ][ 'min-version' ]
@@ -1507,7 +1507,7 @@ class ModulesService
             }
 
             /**
-             * Check if the current NexoPOS version meets
+             * Check if the current ZashPOS version meets
              * the minimum version required by the module
              */
             if (
@@ -1523,7 +1523,7 @@ class ModulesService
                     'status' => 'error',
                     'code' => 'version_mismatch',
                     'message' => sprintf(
-                        __( 'The module "%s" cannot be enabled as it requires NexoPOS version %s or higher, but you are running version %s.' ),
+                        __( 'The module "%s" cannot be enabled as it requires ZashPOS version %s or higher, but you are running version %s.' ),
                         $module[ 'name' ],
                         $module[ 'core' ][ 'min-version' ],
                         config( 'nexopos.version' )

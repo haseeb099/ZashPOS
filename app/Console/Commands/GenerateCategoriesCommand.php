@@ -26,7 +26,7 @@ class GenerateCategoriesCommand extends Command
      *
      * @var string
      */
-    protected $description = 'Generate varied sample NexoPOS categories with generic images';
+    protected $description = 'Generate varied sample ZashPOS categories with generic images';
 
     /**
      * Execute the console command.
