@@ -1,0 +1,14 @@
+<?php
+
+use App\Http\Middleware\NsRestrictMiddleware;
+use Illuminate\Routing\Middleware\SubstituteBindings;
+use Illuminate\Support\Facades\Route;
+use Modules\ZashDine\Http\Controllers\FloorController;
+
+Route::middleware( [
+    SubstituteBindings::class,
+    'auth:sanctum',
+    NsRestrictMiddleware::arguments( 'zash.dine.manage' ),
+] )->prefix( 'zash-dine' )->group( function () {
+    Route::get( 'floor', [FloorController::class, 'status'] )->name( 'zash-dine.api.floor' );
+} );
