@@ -216,7 +216,7 @@ class ModulesController extends DashboardController
 
         return View::make( 'pages.dashboard.modules.marketplace', [
             'title' => __( 'Module Marketplace' ),
-            'description' => __( 'Connect your ZashPOS account to access the module marketplace.' ),
+            'description' => __( 'Connect your NexoPOS account to access the module marketplace.' ),
             'isConnected' => $isConnected,
             'authorizationUrl' => route( ns()->routeName( 'ns.oauth.mynexopos.authorize' ) ),
         ] );

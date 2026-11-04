@@ -6,7 +6,7 @@
                     <i class="las la-shield-alt text-2xl"></i>
                 </div>
                 <div class="min-w-0">
-                    <h1 class="text-2xl font-bold text-fontcolor leading-tight">{{ __( 'My ZashPOS' ) }}</h1>
+                    <h1 class="text-2xl font-bold text-fontcolor leading-tight">{{ __( 'My NexoPOS' ) }}</h1>
                     <p class="text-sm text-fontcolor-soft mt-1">{{ __( 'Authenticate to install modules' ) }}</p>
                 </div>
             </div>
@@ -78,7 +78,7 @@
             <div class="mt-5 flex flex-col-reverse md:flex-row md:items-center md:justify-between gap-3">
                 <div class="text-xs text-fontcolor-soft flex items-center gap-2">
                     <i class="las la-lock"></i>
-                    <span>{{ __( 'Your credentials are handled by My ZashPOS.' ) }}</span>
+                    <span>{{ __( 'Your credentials are handled by My NexoPOS.' ) }}</span>
                 </div>
                 <ns-button
                     :href="authorizationUrl"
@@ -90,7 +90,7 @@
                     <span class="flex items-center justify-center gap-2">
                         <i v-if="isOpening" class="las la-sync animate-spin"></i>
                         <i v-else class="las la-external-link-alt"></i>
-                        <span>{{ isOpening ? __( 'Opening My ZashPOS...' ) : __( 'Go to My ZashPOS' ) }}</span>
+                        <span>{{ isOpening ? __( 'Opening My NexoPOS...' ) : __( 'Go to My NexoPOS' ) }}</span>
                     </span>
                 </ns-button>
             </div>
