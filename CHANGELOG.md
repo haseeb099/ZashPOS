@@ -8,6 +8,7 @@ Tracks ZashPOS changes only, in Keep a Changelog style. Upstream NexoPOS notes s
 - ZashDine Phase 2b: POS order type "Dine-in" that requires a table (locked with `lockForUpdate`), occupies the table and creates `zash_dine_order_items`, frees the table on pay/void/delete, and waiter cancel-meal / add-note APIs with Floor UI actions.
 - ZashDine Phase 2b review: pre-create occupancy check (no orphan orders), sync kitchen rows on order update, cancel meal removes the product from unpaid orders (total/stock), safer `ns_pos_order_types` migration that never drops core defaults, and meal actions blocked when the order is no longer active.
 - ZashDine Phase 2b review: cancel meal runs in a DB transaction (rolls back on failure), cancel is blocked when the order has payments (use a refund), and `modules/ZashDine/Tests` is included in `phpunit.xml` as the ZashDine suite.
+- ZashDine Phase 2b review: restore Areas/Tables/Floor route permission coverage (hard route existence asserts, waiter/manager/neither HTTP checks, static middleware inspection for web routes).
 - ZashDine Phase 2a: native CRUDs for areas and tables (permission zash.dine.manage), unique (area_id, name) on tables, dashboard Floor view with 5s polling, and menu entries Areas / Tables / Floor.
 - ZashDine module skeleton (Phase 1): permissions zash.dine.manage, zash.dine.waiter, zash.dine.chef; tables zash_dine_areas, _tables, _kitchens, _kitchen_categories, _order_items, _modifier_groups, _modifiers; menu entry, settings page and an enable/disable smoke test.
 
