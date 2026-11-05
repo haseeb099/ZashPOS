@@ -9,6 +9,7 @@ use App\Models\ProductHistory;
 use App\Services\OrdersService;
 use App\Services\ProductService;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Modules\ZashDine\Models\DiningTable;
 use Modules\ZashDine\Models\OrderItem;
 
@@ -205,7 +206,7 @@ class DineInTableService
             );
         }
 
-        $order = Order::query()->with( 'products' )->find( $orderItem->order_id );
+        $order = Order::query()->with( ['products', 'payments'] )->find( $orderItem->order_id );
 
         if ( ! $order instanceof Order ) {
             throw new NotAllowedException(
@@ -213,49 +214,67 @@ class DineInTableService
             );
         }
 
-        $orderProduct = $orderItem->order_product_id
-            ? OrderProduct::query()->find( $orderItem->order_product_id )
-            : null;
+        $this->assertCancelAllowedForOrderPayments( $order );
 
-        if ( $orderProduct instanceof OrderProduct ) {
-            /**
-             * Mirrors OrdersService::__deleteUntrackedProducts (order update path).
-             * Avoid OrdersService::deleteOrderProduct(): OrderBeforeDeleteProductEvent
-             * incorrectly uses Bus\Dispatchable in core and fatals on dispatch.
-             */
-            $shouldReturnStock = $order->payment_status !== Order::PAYMENT_HOLD
-                && $orderProduct->product_id;
+        return DB::transaction( function () use ( $orderItem, $order ) {
+            $orderProduct = $orderItem->order_product_id
+                ? OrderProduct::query()->find( $orderItem->order_product_id )
+                : null;
 
-            $unitId = $orderProduct->unit_id;
-            $unitPrice = $orderProduct->unit_price;
-            $productId = $orderProduct->product_id;
-            $quantity = $orderProduct->quantity;
+            if ( $orderProduct instanceof OrderProduct ) {
+                /**
+                 * Mirrors OrdersService::__deleteUntrackedProducts (order update path).
+                 * Avoid OrdersService::deleteOrderProduct(): OrderBeforeDeleteProductEvent
+                 * incorrectly uses Bus\Dispatchable in core and fatals on dispatch.
+                 */
+                $shouldReturnStock = $order->payment_status !== Order::PAYMENT_HOLD
+                    && $orderProduct->product_id;
 
-            $orderProduct->delete();
+                $unitId = $orderProduct->unit_id;
+                $unitPrice = $orderProduct->unit_price;
+                $productId = $orderProduct->product_id;
+                $quantity = $orderProduct->quantity;
 
-            if ( $shouldReturnStock ) {
-                $this->productService->stockAdjustment(
-                    ProductHistory::ACTION_ADJUSTMENT_RETURN,
-                    [
-                        'unit_id' => $unitId,
-                        'unit_price' => $unitPrice,
-                        'product_id' => $productId,
-                        'quantity' => $quantity,
-                        'orderProduct' => $orderProduct,
-                        'order_id' => $order->id,
-                    ]
+                $orderProduct->delete();
+
+                if ( $shouldReturnStock ) {
+                    $this->productService->stockAdjustment(
+                        ProductHistory::ACTION_ADJUSTMENT_RETURN,
+                        [
+                            'unit_id' => $unitId,
+                            'unit_price' => $unitPrice,
+                            'product_id' => $productId,
+                            'quantity' => $quantity,
+                            'orderProduct' => $orderProduct,
+                            'order_id' => $order->id,
+                        ]
+                    );
+                }
+
+                $this->ordersService->refreshOrder(
+                    $order->fresh( ['payments', 'products', 'refunds'] ) ?? $order
                 );
             }
 
-            $this->ordersService->refreshOrder(
-                $order->fresh( ['payments', 'products', 'refunds'] ) ?? $order
+            $orderItem->status = OrderItem::STATUS_CANCELLED;
+            $orderItem->save();
+
+            return $orderItem->fresh();
+        } );
+    }
+
+    public function assertCancelAllowedForOrderPayments( Order $order ): void
+    {
+        $order->loadMissing( 'payments' );
+
+        $hasPayments = $order->payment_status === Order::PAYMENT_PARTIALLY
+            || $order->payments->isNotEmpty();
+
+        if ( $hasPayments ) {
+            throw new NotAllowedException(
+                __m( 'This order has payments. Use a refund instead.', 'ZashDine' )
             );
         }
-
-        $orderItem->status = OrderItem::STATUS_CANCELLED;
-        $orderItem->save();
-
-        return $orderItem->fresh();
     }
 
     public function updateOrderItemNote( OrderItem $orderItem, string $note ): OrderItem

@@ -2,8 +2,10 @@
 
 namespace Modules\ZashDine\Tests\Feature;
 
+use App\Classes\ModuleRouting;
 use App\Services\ModulesService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Route;
 use Tests\TestCase;
 use Tests\Traits\WithAuthentication;
 
@@ -71,5 +73,17 @@ final class ZashDineOrderTypesMigrationTest extends TestCase
         $migrationResult = $modules->runAllMigration( 'ZashDine' );
         $this->assertSame( 'success', $migrationResult['status'] ?? null );
         $modules->loadModulesMigrations();
+        ns()->registerGatePermissions();
+
+        $modules->load();
+        $module = $modules->get( 'ZashDine' );
+        $this->assertIsArray( $module, 'ZashDine should be discoverable after enable.' );
+
+        $modules->boot( $module );
+
+        if ( ! Route::has( 'zash-dine.api.floor' ) ) {
+            ModuleRouting::mapModuleWebRoutes( $module );
+            ModuleRouting::mapModuleApiRoutes( $module );
+        }
     }
 }

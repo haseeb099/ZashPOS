@@ -2,6 +2,7 @@
 
 namespace Modules\ZashDine\Tests\Feature;
 
+use App\Classes\ModuleRouting;
 use App\Models\Order;
 use App\Models\OrderProduct;
 use App\Models\Product;
@@ -9,13 +10,18 @@ use App\Models\ProductUnitQuantity;
 use App\Models\Role;
 use App\Models\User;
 use App\Services\ModulesService;
+use App\Services\OrdersService;
+use App\Services\ProductService;
 use App\Services\UsersService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Str;
+use Mockery;
 use Modules\ZashDine\Models\Area;
 use Modules\ZashDine\Models\DiningTable;
 use Modules\ZashDine\Models\OrderItem;
 use Modules\ZashDine\Services\DineInTableService;
+use RuntimeException;
 use Tests\TestCase;
 use Tests\Traits\WithAuthentication;
 use Tests\Traits\WithOrderTest;
@@ -191,9 +197,40 @@ final class ZashDineDineInOrderTest extends TestCase
         [$table] = $this->createAvailableTable();
         $this->shouldMakePayment = false;
 
+        $products = Product::notGrouped()
+            ->notInGroup()
+            ->with( 'unit_quantities' )
+            ->limit( 2 )
+            ->get();
+        $this->assertGreaterThanOrEqual( 2, $products->count() );
+
+        $firstProduct = $products[0];
+        $extraProduct = $products[1];
+        $firstUnit = $firstProduct->unit_quantities->firstOrFail();
+        $extraUnit = $extraProduct->unit_quantities->firstOrFail();
+        $firstUnit->quantity = max( (float) $firstUnit->quantity, 50 );
+        $firstUnit->save();
+        $extraUnit->quantity = max( (float) $extraUnit->quantity, 50 );
+        $extraUnit->save();
+
+        $firstLine = [
+            'product_id' => $firstProduct->id,
+            'name' => $firstProduct->name,
+            'quantity' => 1,
+            'unit_price' => $firstUnit->sale_price,
+            'unit_quantity_id' => $firstUnit->id,
+            'unit_id' => $firstUnit->unit_id,
+            'discount' => 0,
+            'discount_type' => 'percentage',
+            'discount_percentage' => 0,
+            'tax_type' => 'inclusive',
+            'tax_group_id' => 1,
+        ];
+
         $responses = $this->processOrders( [
             'type' => ['identifier' => DineInTableService::ORDER_TYPE],
             DineInTableService::TABLE_FIELD => $table->id,
+            'products' => [$firstLine],
             'coupons' => [],
             'payments' => [],
         ] );
@@ -202,16 +239,6 @@ final class ZashDineDineInOrderTest extends TestCase
         $order = Order::query()->with( 'products' )->findOrFail( $orderData['id'] );
         $originalItem = OrderItem::query()->where( 'order_id', $order->id )->firstOrFail();
         $originalProductId = $originalItem->order_product_id;
-
-        $extraProduct = Product::notGrouped()
-            ->notInGroup()
-            ->where( 'id', '!=', $order->products->first()->product_id )
-            ->with( 'unit_quantities' )
-            ->firstOrFail();
-
-        $extraUnit = $extraProduct->unit_quantities->first();
-        $extraUnit->quantity = max( (float) $extraUnit->quantity, 50 );
-        $extraUnit->save();
 
         $payload = $orderData;
         $payload['type'] = ['identifier' => DineInTableService::ORDER_TYPE];
@@ -246,6 +273,7 @@ final class ZashDineDineInOrderTest extends TestCase
                 'discount_type' => 'percentage',
                 'discount_percentage' => 0,
                 'tax_type' => 'inclusive',
+                'tax_group_id' => 1,
             ] )
             ->values()
             ->all();
@@ -319,6 +347,158 @@ final class ZashDineDineInOrderTest extends TestCase
 
         $order->refresh();
         $this->assertLessThan( $totalBefore, (float) $order->total );
+    }
+
+    public function test_cancel_meal_rolls_back_when_stock_adjustment_fails(): void
+    {
+        [$table] = $this->createAvailableTable();
+        $this->shouldMakePayment = false;
+
+        $product = Product::notGrouped()
+            ->notInGroup()
+            ->with( 'unit_quantities' )
+            ->firstOrFail();
+        $unitQuantity = $product->unit_quantities->firstOrFail();
+        $unitQuantity->quantity = max( (float) $unitQuantity->quantity, 50 );
+        $unitQuantity->save();
+
+        $responses = $this->processOrders( [
+            'type' => ['identifier' => DineInTableService::ORDER_TYPE],
+            DineInTableService::TABLE_FIELD => $table->id,
+            'products' => [[
+                'product_id' => $product->id,
+                'name' => $product->name,
+                'quantity' => 1,
+                'unit_price' => $unitQuantity->sale_price,
+                'unit_quantity_id' => $unitQuantity->id,
+                'unit_id' => $unitQuantity->unit_id,
+                'discount' => 0,
+                'discount_type' => 'percentage',
+                'discount_percentage' => 0,
+                'tax_type' => 'inclusive',
+                'tax_group_id' => 1,
+            ]],
+            'coupons' => [],
+            'payments' => [],
+        ] );
+
+        $orderId = $responses[0]['order-creation']['data']['order']['id'];
+        $order = Order::query()->findOrFail( $orderId );
+        $order->payment_status = Order::PAYMENT_UNPAID;
+        $order->save();
+
+        $item = OrderItem::query()->where( 'order_id', $orderId )->firstOrFail();
+        $orderProductId = $item->order_product_id;
+        $this->assertNotEmpty( $orderProductId );
+        $this->assertTrue(
+            OrderProduct::query()->whereKey( $orderProductId )->where( 'product_id', $product->id )->exists()
+        );
+
+        $statusBefore = $item->status;
+        $totalBefore = (float) $order->fresh()->total;
+
+        $productService = Mockery::mock( ProductService::class );
+        $productService->shouldReceive( 'stockAdjustment' )
+            ->once()
+            ->andThrow( new RuntimeException( 'Forced stock adjustment failure' ) );
+
+        $service = new DineInTableService(
+            app( OrdersService::class ),
+            $productService
+        );
+
+        $thrown = null;
+
+        try {
+            $service->cancelOrderItem( $item->fresh() );
+        } catch ( RuntimeException $exception ) {
+            $thrown = $exception;
+        }
+
+        $this->assertInstanceOf( RuntimeException::class, $thrown );
+        $this->assertSame( 'Forced stock adjustment failure', $thrown->getMessage() );
+
+        $this->assertTrue(
+            OrderProduct::query()->whereKey( $orderProductId )->exists()
+        );
+        $this->assertSame( $totalBefore, (float) $order->fresh()->total );
+        $this->assertDatabaseHas( 'zash_dine_order_items', [
+            'id' => $item->id,
+            'status' => $statusBefore,
+        ] );
+    }
+
+    public function test_cancel_meal_is_blocked_when_order_has_payments(): void
+    {
+        [$table] = $this->createAvailableTable();
+        $this->shouldMakePayment = false;
+
+        $product = Product::notGrouped()
+            ->notInGroup()
+            ->with( 'unit_quantities' )
+            ->firstOrFail();
+        $unitQuantity = $product->unit_quantities->firstOrFail();
+        $unitQuantity->quantity = max( (float) $unitQuantity->quantity, 100 );
+        $unitQuantity->save();
+
+        $productLine = [
+            'product_id' => $product->id,
+            'name' => $product->name,
+            'quantity' => 2,
+            'unit_price' => $unitQuantity->sale_price,
+            'unit_quantity_id' => $unitQuantity->id,
+            'unit_id' => $unitQuantity->unit_id,
+            'discount' => 0,
+            'discount_type' => 'percentage',
+            'discount_percentage' => 0,
+            'tax_type' => 'inclusive',
+            'tax_group_id' => 1,
+        ];
+
+        $responses = $this->processOrders( [
+            'type' => ['identifier' => DineInTableService::ORDER_TYPE],
+            DineInTableService::TABLE_FIELD => $table->id,
+            'products' => [$productLine],
+            'coupons' => [],
+            'payments' => [
+                [
+                    'identifier' => 'cash-payment',
+                    'value' => 1,
+                ],
+            ],
+        ] );
+
+        $orderId = $responses[0]['order-creation']['data']['order']['id'];
+        $order = Order::query()->with( 'payments' )->findOrFail( $orderId );
+
+        $this->assertTrue(
+            $order->payment_status === Order::PAYMENT_PARTIALLY || $order->payments->isNotEmpty()
+        );
+
+        $item = OrderItem::query()->where( 'order_id', $orderId )->firstOrFail();
+        $orderProductId = $item->order_product_id;
+        $totalBefore = (float) $order->total;
+        $kitchenRowsBefore = OrderItem::query()->where( 'order_id', $orderId )->get()
+            ->map( fn ( OrderItem $row ) => [ $row->id, $row->status ] )
+            ->all();
+
+        $response = $this->json( 'POST', 'api/zash-dine/order-items/' . $item->id . '/cancel' );
+        $response->assertStatus( 403 );
+        $this->assertStringContainsStringIgnoringCase(
+            'refund',
+            (string) $response->json( 'message' )
+        );
+
+        $this->assertTrue(
+            OrderProduct::query()->whereKey( $orderProductId )->exists()
+        );
+        $this->assertSame( $totalBefore, (float) $order->fresh()->total );
+        $this->assertSame(
+            $kitchenRowsBefore,
+            OrderItem::query()->where( 'order_id', $orderId )->get()
+                ->map( fn ( OrderItem $row ) => [ $row->id, $row->status ] )
+                ->all()
+        );
     }
 
     public function test_meal_actions_are_blocked_when_order_is_no_longer_active(): void
@@ -428,6 +608,29 @@ final class ZashDineDineInOrderTest extends TestCase
         $migrationResult = $modules->runAllMigration( 'ZashDine' );
         $this->assertSame( 'success', $migrationResult['status'] ?? null );
         $modules->loadModulesMigrations();
+
+        $admin = Role::namespace( Role::ADMIN );
+
+        if ( $admin ) {
+            $admin->addPermissions( [
+                'zash.dine.manage',
+                'zash.dine.waiter',
+                'zash.dine.chef',
+            ] );
+        }
+
+        ns()->registerGatePermissions();
+
+        $modules->load();
+        $module = $modules->get( 'ZashDine' );
+        $this->assertIsArray( $module, 'ZashDine should be discoverable after enable.' );
+
+        $modules->boot( $module );
+
+        if ( ! Route::has( 'zash-dine.api.floor' ) ) {
+            ModuleRouting::mapModuleWebRoutes( $module );
+            ModuleRouting::mapModuleApiRoutes( $module );
+        }
 
         $types = ns()->option->get( 'ns_pos_order_types' ) ?: [];
         if ( ! in_array( 'dine-in', $types, true ) ) {

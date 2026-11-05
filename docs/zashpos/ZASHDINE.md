@@ -27,8 +27,8 @@ areas, tables, kitchens, kitchen_categories, order_items, modifier_groups, modif
 - Frees the table when the order is paid, voided, or deleted (partially paid keeps the table occupied)
 
 ## Waiter APIs
-- `POST /api/zash-dine/order-items/{id}/cancel` — cancels the kitchen row **and** removes the product from an unpaid/active order (total via `OrdersService::refreshOrder`, stock return via `ProductService::stockAdjustment`, same path as order-update `__deleteUntrackedProducts`). Blocked when the order is no longer on the floor (paid/void/freed). Note: core `OrdersService::deleteOrderProduct` is currently unusable (`OrderBeforeDeleteProductEvent` uses Bus `Dispatchable`).
-- `PUT /api/zash-dine/order-items/{id}/note` body `{ "note": "..." }` — same active-order guard
+- `POST /api/zash-dine/order-items/{id}/cancel` — cancels the kitchen row **and** removes the product from an unpaid/active order inside one `DB::transaction` (total via `OrdersService::refreshOrder`, stock return via `ProductService::stockAdjustment`, same path as order-update `__deleteUntrackedProducts`). Blocked when the order is no longer on the floor (paid/void/freed), and blocked with “use a refund instead” when the order is partially paid or already has payments (notes still allowed). Note: core `OrdersService::deleteOrderProduct` is currently unusable (`OrderBeforeDeleteProductEvent` uses Bus `Dispatchable`).
+- `PUT /api/zash-dine/order-items/{id}/note` body `{ "note": "..." }` — active-order guard only (payments do not block notes)
 - `GET /api/zash-dine/tables/available`
 
 ## Scope by phase
@@ -41,11 +41,14 @@ areas, tables, kitchens, kitchen_categories, order_items, modifier_groups, modif
 
 ## Test
 ```bash
+php artisan test --compact --testsuite=ZashDine
 php artisan test --compact modules/ZashDine/Tests
 php artisan test --compact modules/ZashDine/Tests/Feature/ZashDineModuleSmokeTest.php
 php artisan test --compact modules/ZashDine/Tests/Feature/ZashDineAreasTablesCrudTest.php
 php artisan test --compact modules/ZashDine/Tests/Feature/ZashDineDineInOrderTest.php
 ```
+
+The host `phpunit.xml` includes a `ZashDine` testsuite (`modules/ZashDine/Tests`), so a plain `php artisan test --compact` run also executes the module tests.
 
 ## Status
 Phase 2b in progress (dine-in POS + waiter meal actions).
