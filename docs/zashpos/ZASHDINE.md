@@ -48,6 +48,23 @@ php artisan test --compact modules/ZashDine/Tests/Feature/ZashDineAreasTablesCru
 php artisan test --compact modules/ZashDine/Tests/Feature/ZashDineDineInOrderTest.php
 ```
 
+## Playwright
+Browser coverage lives in `e2e/` with its own `package.json` (root `package.json` is not a Playwright dependency). Credentials stay in `e2e/.env` (see `e2e/.env.example`). The Laravel app for that suite uses `.env.e2e` (`DB_DATABASE=database/e2e.sqlite`), which is not committed.
+
+```bash
+cd e2e
+npm install
+npx playwright install chromium
+node scripts/setup.mjs
+cd ..
+php artisan serve --env=e2e --no-reload --host=127.0.0.1 --port=8001
+cd e2e
+npm test
+npm run report
+```
+
+`E2E_BASE_URL` must use the same host as `SESSION_DOMAIN` in `.env.e2e` (this repo uses `127.0.0.1`). `SANCTUM_STATEFUL_DOMAINS` must include that host and port (`127.0.0.1:8001`), or dashboard API calls return Unauthenticated. `setup.mjs` writes both when it creates `.env.e2e`. `setup.mjs` installs ZashPOS, enables ZashDine, migrates it, generates 4 categories and 30 products, turns stock management on, sets every unit quantity to 100, creates a walk-in customer, and creates a waiter (store cashier permissions plus `zash.dine.waiter`) and a cashier user. `--no-reload` is required so the PHP server keeps the variables from `.env.e2e`. Without it, `artisan serve` clears them and the worker boots the default `.env`. Run that server from the project root while Vite is running if the dashboard loads assets from the dev server. Paying a reopened order re-selects the customer in the POS first: the loaded order omits `customer.group`, and the core payment popup reads `customer.group.minimal_credit_payment` (`resources/ts/popups/ns-pos-payment-popup.vue`). That core file is not changed here.
+
 The host `phpunit.xml` includes a `ZashDine` testsuite (`modules/ZashDine/Tests`), so a plain `php artisan test --compact` run also executes the module tests.
 
 ## Status

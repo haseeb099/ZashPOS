@@ -5,6 +5,7 @@ Tracks ZashPOS changes only, in Keep a Changelog style. Upstream NexoPOS notes s
 ## [Unreleased]
 
 ### Added
+- ZashDine Playwright suite in `e2e/` (own package and lockfile): order types, areas/tables, permissions, dine-in POS, held-order edits, waiter note/cancel, concurrent table claims, and tablet screenshots. Setup uses `.env.e2e` and `database/e2e.sqlite`.
 - ZashDine Phase 2b: POS order type "Dine-in" that requires a table (locked with `lockForUpdate`), occupies the table and creates `zash_dine_order_items`, frees the table on pay/void/delete, and waiter cancel-meal / add-note APIs with Floor UI actions.
 - ZashDine Phase 2b review: pre-create occupancy check (no orphan orders), sync kitchen rows on order update, cancel meal removes the product from unpaid orders (total/stock), safer `ns_pos_order_types` migration that never drops core defaults, and meal actions blocked when the order is no longer active.
 - ZashDine Phase 2b review: cancel meal runs in a DB transaction (rolls back on failure), cancel is blocked when the order has payments (use a refund), and `modules/ZashDine/Tests` is included in `phpunit.xml` as the ZashDine suite.
