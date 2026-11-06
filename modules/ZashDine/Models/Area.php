@@ -26,4 +26,14 @@ class Area extends NsModel
     {
         return $this->belongsTo( User::class, 'author_id' );
     }
+
+    public function hasOccupiedTables(): bool
+    {
+        return $this->tables()
+            ->where( function ( $query ) {
+                $query->where( 'status', DiningTable::STATUS_OCCUPIED )
+                    ->orWhereNotNull( 'current_order_id' );
+            } )
+            ->exists();
+    }
 }

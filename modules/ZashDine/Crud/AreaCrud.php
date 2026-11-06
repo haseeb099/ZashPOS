@@ -115,8 +115,16 @@ class AreaCrud extends CrudService
         return $request;
     }
 
-    public function beforePut( $request, $entry )
+    public function beforePut( $request, $entry, $inputs = [] )
     {
+        $nextStatus = $inputs['status'] ?? $entry->status;
+
+        if ( $nextStatus === Area::STATUS_DISABLED && $entry->hasOccupiedTables() ) {
+            throw new NotAllowedException(
+                __m( 'Unable to disable an area that has occupied tables.', 'ZashDine' )
+            );
+        }
+
         return $request;
     }
 
@@ -129,6 +137,12 @@ class AreaCrud extends CrudService
     {
         if ( $namespace !== self::IDENTIFIER ) {
             return;
+        }
+
+        if ( $model instanceof Area && $model->hasOccupiedTables() ) {
+            throw new NotAllowedException(
+                __m( 'Unable to delete an area that has occupied tables.', 'ZashDine' )
+            );
         }
 
         if ( $model->tables()->exists() ) {

@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\NsRestrictAnyMiddleware;
 use App\Http\Middleware\NsRestrictMiddleware;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Support\Facades\Route;
@@ -18,6 +19,11 @@ Route::middleware( [
     Route::get( 'tables', [TablesController::class, 'list'] )->name( 'zash-dine.tables.list' );
     Route::get( 'tables/create', [TablesController::class, 'create'] )->name( 'zash-dine.tables.create' );
     Route::get( 'tables/edit/{table}', [TablesController::class, 'edit'] )->name( 'zash-dine.tables.edit' );
+} );
 
+Route::middleware( [
+    SubstituteBindings::class,
+    NsRestrictAnyMiddleware::class . ':zash.dine.waiter,zash.dine.manage',
+] )->prefix( 'dashboard/zash-dine' )->group( function () {
     Route::get( 'floor', [FloorController::class, 'index'] )->name( 'zash-dine.floor' );
 } );

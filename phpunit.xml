@@ -67,6 +67,9 @@
       <directory suffix="ProviderRoutePermissionTest.php">./tests/Feature</directory>
       <directory suffix="ApiRoutePermissionTest.php">./tests/Feature</directory>
     </testsuite>
+    <testsuite name="ZashDine">
+      <directory suffix="Test.php">./modules/ZashDine/Tests</directory>
+    </testsuite>
   </testsuites>
   <coverage>
     <report>

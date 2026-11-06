@@ -8,10 +8,14 @@ class RenderFooterEventListener
 {
     public function handle( RenderFooterEvent $event ): void
     {
-        if ( $event->routeName !== 'zash-dine.floor' ) {
+        if ( $event->routeName === 'zash-dine.floor' ) {
+            $event->output->addView( 'ZashDine::floor-script' );
+
             return;
         }
 
-        $event->output->addView( 'ZashDine::floor-script' );
+        if ( $event->routeName === ns()->routeName( 'ns.dashboard.pos' ) ) {
+            $event->output->addView( 'ZashDine::pos-script' );
+        }
     }
 }
