@@ -12,6 +12,9 @@ Tracks ZashPOS changes only, in Keep a Changelog style. Upstream NexoPOS notes s
 - ZashDine Phase 2a: native CRUDs for areas and tables (permission zash.dine.manage), unique (area_id, name) on tables, dashboard Floor view with 5s polling, and menu entries Areas / Tables / Floor.
 - ZashDine module skeleton (Phase 1): permissions zash.dine.manage, zash.dine.waiter, zash.dine.chef; tables zash_dine_areas, _tables, _kitchens, _kitchen_categories, _order_items, _modifier_groups, _modifiers; menu entry, settings page and an enable/disable smoke test.
 
+### Fixed
+- ZashDine POS script waits for the deferred POS bundle before registering the dine-in table prompt, restores the table id when a held dine-in order is saved again, and sends a typed table id to the server even when that table is no longer in the free list.
+
 ### Changed
 - ZashDine Floor is available to `zash.dine.waiter` or `zash.dine.manage`. Tables CRUD no longer lets staff set Occupied manually. Duplicate table names and areas with occupied tables return friendly errors.
 - Visible rebrand from NexoPOS to ZashPOS (Phase 0): dashboard header, auth/setup pages, logo, emails, lang files, README, composer.json and package.json names. Footer shows "Based on NexoPOS". Internal identifiers (namespaces, ns.* permissions, config keys) are unchanged.
