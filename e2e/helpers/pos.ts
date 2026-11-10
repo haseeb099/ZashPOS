@@ -19,6 +19,12 @@ export async function openPos(page: Page): Promise<void> {
 
         return page.evaluate(() => Boolean((window as unknown as { POS?: { order?: { getValue?: () => { customer?: unknown } } } }).POS?.order?.getValue?.()?.customer));
     }, { timeout: 30000 }).toBe(true);
+
+    await expect.poll(async () => page.evaluate(() => {
+        const queue = (window as unknown as { POS?: { orderTypeQueue?: Array<{ identifier?: string }> } }).POS?.orderTypeQueue;
+
+        return Array.isArray(queue) && queue.some((entry) => entry?.identifier === 'zash-dine/dine-in');
+    }), { timeout: 15000 }).toBe(true);
 }
 
 export async function addProduct(page: Page, productName: string): Promise<void> {
@@ -56,9 +62,14 @@ export async function addProduct(page: Page, productName: string): Promise<void>
     await expect(page.locator('#cart-products-table')).toContainText(productName);
 }
 
-async function chooseDineIn(page: Page, tableName: string): Promise<void> {
+async function chooseDineIn(page: Page, tableName: string, fallbackId?: number): Promise<void> {
     await expect(page.getByText('Define The Order Type')).toBeVisible();
-    const prompt = pickTable(page, tableName);
+    const prompt = Promise.race([
+        pickTable(page, tableName, fallbackId),
+        new Promise<string>((_, reject) => {
+            setTimeout(() => reject(new Error(`Timed out waiting for the dine-in table prompt for "${tableName}".`)), 20000);
+        }),
+    ]);
     await page.getByText('Dine-in', { exact: true }).click();
     await prompt;
 }
@@ -103,6 +114,7 @@ export async function openOrderFromTab(page: Page, tab: string, code: string): P
     }
 
     await expect(page.locator('#cart-products-table')).not.toContainText('No products added');
+    await ensureOrderReady(page);
 }
 
 export async function openHeldOrder(page: Page, reference: string): Promise<void> {
@@ -112,24 +124,78 @@ export async function openHeldOrder(page: Page, reference: string): Promise<void
     await expect(row).toBeVisible();
     await row.getByRole('button', { name: 'Open' }).click();
     await expect(page.locator('#cart-products-table')).not.toContainText('No products added');
+    await ensureOrderReady(page);
+}
+
+export type PosCustomerSnapshot = {
+    id: number | null;
+    first_name: string | null;
+    last_name: string | null;
+    group_id: number | null;
+    minimal_credit_payment: number | null;
+};
+
+export async function readPosCustomer(page: Page): Promise<PosCustomerSnapshot> {
+    return page.evaluate(() => {
+        const order = (window as unknown as {
+            POS?: {
+                order?: {
+                    getValue?: () => {
+                        customer?: {
+                            id?: number;
+                            first_name?: string;
+                            last_name?: string;
+                            group_id?: number;
+                            group?: { id?: number; minimal_credit_payment?: number };
+                        };
+                    };
+                };
+            };
+        }).POS?.order?.getValue?.();
+        const customer = order?.customer;
+        const group = customer?.group;
+
+        return {
+            id: customer?.id ?? null,
+            first_name: customer?.first_name ?? null,
+            last_name: customer?.last_name ?? null,
+            group_id: group?.id ?? customer?.group_id ?? null,
+            minimal_credit_payment: group?.minimal_credit_payment ?? null,
+        };
+    });
 }
 
 async function ensureOrderReady(page: Page): Promise<void> {
     await expect.poll(async () => page.evaluate(() => {
-        const order = (window as unknown as { POS?: { order?: { getValue?: () => { products?: unknown[]; customer?: unknown; type?: unknown } } } }).POS?.order?.getValue?.();
+        const order = (window as unknown as {
+            POS?: {
+                order?: {
+                    getValue?: () => {
+                        products?: unknown[];
+                        customer?: { id?: number; group?: { minimal_credit_payment?: number | null } };
+                        type?: unknown;
+                    };
+                };
+            };
+        }).POS?.order?.getValue?.();
+        const group = order?.customer?.group;
 
-        return Boolean(order?.customer) && Boolean(order?.type) && Array.isArray(order?.products) && order.products.length > 0;
+        return Boolean(order?.customer?.id)
+            && Boolean(order?.type)
+            && Array.isArray(order?.products)
+            && order.products.length > 0
+            && Boolean(group)
+            && group.minimal_credit_payment !== undefined
+            && group.minimal_credit_payment !== null;
     })).toBe(true);
 }
 
 export async function payInFull(page: Page, tableName?: string): Promise<void> {
     await ensureOrderReady(page);
 
-    if (!tableName) {
-        await page.getByText(/Customer:/).click();
-        await page.locator('#ns-pos-customer-select-popup li.cursor-pointer').first().click();
-        await ensureOrderReady(page);
-    }
+    const customerBefore = await readPosCustomer(page);
+    expect(customerBefore.id).not.toBeNull();
+    expect(customerBefore.minimal_credit_payment).not.toBeNull();
 
     const logs: string[] = [];
     const onConsole = (message: { type: () => string; text: () => string }): void => {
@@ -150,6 +216,9 @@ export async function payInFull(page: Page, tableName?: string): Promise<void> {
 
     try {
         await expect(page.locator('#ns-payment-popup')).toBeVisible();
+        const customerDuringPayment = await readPosCustomer(page);
+        expect(customerDuringPayment.id).toBe(customerBefore.id);
+        expect(customerDuringPayment.minimal_credit_payment).toBe(customerBefore.minimal_credit_payment);
     } catch (error) {
         throw new Error(`${String(error)}\nconsole:\n${logs.slice(-20).join('\n')}`, { cause: error });
     } finally {

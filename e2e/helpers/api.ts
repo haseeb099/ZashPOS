@@ -144,3 +144,21 @@ export async function productStock(page: Page, productId: number): Promise<numbe
 export async function expectSnack(page: Page, pattern: RegExp | string): Promise<void> {
     await expect(page.locator('#snack-wrapper')).toContainText(pattern, { timeout: 20000 });
 }
+
+export async function setCustomerGroupMinimalCreditPayment(
+    page: Page,
+    groupId: number,
+    minimalCreditPayment: number,
+): Promise<void> {
+    const current = await apiSend(page, 'get', `/api/customers-groups/${groupId}`);
+    const group = (Array.isArray(current) ? current[0] : current) as Json;
+
+    await apiSend(page, 'put', `/api/crud/ns.customers-groups/${groupId}`, {
+        name: String(group.name ?? 'Walk-in'),
+        general: {
+            reward_system_id: group.reward_system_id ?? null,
+            minimal_credit_payment: minimalCreditPayment,
+            description: String(group.description ?? 'Playwright group payment rule'),
+        },
+    });
+}
