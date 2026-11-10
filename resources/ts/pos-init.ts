@@ -999,9 +999,29 @@ export class POS {
      * might request additionnal information through a popup.
      * @param order Order
      */
+    resolveMinimalCreditPaymentPercent(order: Order | any): number {
+        const group = order?.customer?.group;
+
+        if ( group === undefined || group === null || group.minimal_credit_payment === undefined || group.minimal_credit_payment === null ) {
+            throw {
+                status: 'error',
+                message: __( 'Customer payment rules are unavailable. Keep the current customer and reload the order.' ),
+            };
+        }
+
+        return Number( group.minimal_credit_payment );
+    }
+
     canProceedAsLaidAway(_order: Order): { status: string, message: string, data: { order: Order } } | any {
         return new Promise(async (resolve, reject) => {
-            const minimalPaymentPercent = _order.customer.group.minimal_credit_payment;
+            let minimalPaymentPercent: number;
+
+            try {
+                minimalPaymentPercent = this.resolveMinimalCreditPaymentPercent( _order );
+            } catch ( exception ) {
+                return reject( exception );
+            }
+
             const firstPart     =   math.chain( _order.total ).multiply( minimalPaymentPercent ).done();
             let expected: any = math.chain( firstPart ).divide( 100 ).done();
             expected = parseFloat(expected);
@@ -1090,7 +1110,13 @@ export class POS {
                 ...orderFields
             };
 
-            const minimalPayment = order.customer.group.minimal_credit_payment;
+            let minimalPayment: number;
+
+            try {
+                minimalPayment = this.resolveMinimalCreditPaymentPercent( order );
+            } catch ( exception ) {
+                return reject( exception );
+            }
 
             /**
              * this verification applies only if the 
@@ -1436,9 +1462,23 @@ export class POS {
              * customer meta data
              */
             if (customer.group === undefined || customer.group === null) {
+                if ( customer.id === undefined || customer.id === null ) {
+                    return reject({
+                        status: 'error',
+                        message: __( 'Customer payment rules are unavailable because the customer is missing.' ),
+                    });
+                }
+
                 nsHttpClient.get(`/api/customers/${customer.id}/group`)
                     .subscribe({
                         next: group => {
+                            if ( group === undefined || group === null ) {
+                                return reject({
+                                    status: 'error',
+                                    message: __( 'Customer payment rules are unavailable because the customer group could not be loaded.' ),
+                                });
+                            }
+
                             order.customer.group = group;
                             this.order.next(order);
                             resolve(order);
