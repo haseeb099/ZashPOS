@@ -1002,8 +1002,11 @@ export class POS {
     /**
      * Customer-group minimum credit payment is a percentage.
      * Backend stores a numeric value defaulting to 0 (no minimum) and
-     * casts with (float). Accept finite values >= 0, including numeric
-     * strings. Reject missing, blank, nonnumeric and nonfinite values.
+     * casts with (float). Accept only:
+     * - a finite number >= 0
+     * - a nonblank string that converts to a finite number >= 0
+     * Reject missing, blank, nonnumeric, nonfinite values, and also
+     * booleans/arrays/objects (Number(false)===0, Number([])===0, Number(true)===1).
      */
     resolveMinimalCreditPaymentPercent(order: Order | any): number {
         const group = order?.customer?.group;
@@ -1024,23 +1027,43 @@ export class POS {
             };
         }
 
-        if ( typeof raw === 'string' && raw.trim() === '' ) {
-            throw {
-                status: 'error',
-                message: __( 'Customer payment rules are invalid. Keep the current customer and reload the order.' ),
-            };
+        if ( typeof raw === 'number' ) {
+            if ( ! Number.isFinite( raw ) || raw < 0 ) {
+                throw {
+                    status: 'error',
+                    message: __( 'Customer payment rules are invalid. Keep the current customer and reload the order.' ),
+                };
+            }
+
+            return raw;
         }
 
-        const percent = Number( typeof raw === 'string' ? raw.trim() : raw );
+        if ( typeof raw === 'string' ) {
+            const trimmed = raw.trim();
 
-        if ( ! Number.isFinite( percent ) || percent < 0 ) {
-            throw {
-                status: 'error',
-                message: __( 'Customer payment rules are invalid. Keep the current customer and reload the order.' ),
-            };
+            if ( trimmed === '' ) {
+                throw {
+                    status: 'error',
+                    message: __( 'Customer payment rules are invalid. Keep the current customer and reload the order.' ),
+                };
+            }
+
+            const percent = Number( trimmed );
+
+            if ( ! Number.isFinite( percent ) || percent < 0 ) {
+                throw {
+                    status: 'error',
+                    message: __( 'Customer payment rules are invalid. Keep the current customer and reload the order.' ),
+                };
+            }
+
+            return percent;
         }
 
-        return percent;
+        throw {
+            status: 'error',
+            message: __( 'Customer payment rules are invalid. Keep the current customer and reload the order.' ),
+        };
     }
 
     hasValidCustomerPaymentRules(order: Order | any): boolean {

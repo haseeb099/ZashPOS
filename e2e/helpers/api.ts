@@ -162,3 +162,7 @@ export async function setCustomerGroupMinimalCreditPayment(
         },
     });
 }
+
+export async function fetchPersistedOrder(page: Page, orderId: number): Promise<Json> {
+    return apiSend(page, 'get', `/api/orders/${orderId}`);
+}

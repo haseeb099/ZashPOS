@@ -3,6 +3,7 @@ import { authState } from '../helpers/auth';
 import {
     createAreaAndTable,
     deleteAreaAndTable,
+    fetchPersistedOrder,
     listProducts,
     setCustomerGroupMinimalCreditPayment,
 } from '../helpers/api';
@@ -10,6 +11,9 @@ import { expectTableStatus, readFloorTable } from '../helpers/floor';
 import {
     addProduct,
     expectNoOrderWrites,
+    expectNoUnexpectedPageErrors,
+    expectPaymentRuleTypeMatrix,
+    expectPaymentRulesBlocked,
     mutatePosCustomerGroupRule,
     openLayawayPopup,
     openOrderFromTab,
@@ -44,6 +48,7 @@ test('layaway enforces nonzero group minimums and rejects invalid payment rules'
 
         const occupied = await readFloorTable(page, created.tableName);
         orderId = occupied?.current_order_id ?? null;
+        expect(orderId).not.toBeNull();
         expect(occupied?.order?.payment_status).toBe('unpaid');
         expect(occupied?.order?.code).toBeTruthy();
 
@@ -54,6 +59,7 @@ test('layaway enforces nonzero group minimums and rejects invalid payment rules'
         const reopened = await readPosCustomer(page);
         expect(reopened.id).toBe(customerAtSale.id);
         expect(reopened.minimal_credit_payment).toBe(40);
+        await expectPaymentRuleTypeMatrix(page);
 
         const orderTotal = await page.evaluate(() => {
             const order = (window as unknown as { POS?: { order?: { getValue?: () => { total?: number } } } }).POS?.order?.getValue?.();
@@ -92,16 +98,22 @@ test('layaway enforces nonzero group minimums and rejects invalid payment rules'
         await initialPayment.getByRole('button', { name: 'Yes' }).click();
         await expect(page.locator('#ns-payment-popup')).toBeHidden({ timeout: 30000 });
 
-        const customerAfterLayaway = await readPosCustomer(page).catch(() => null);
-        if (customerAfterLayaway?.id) {
-            expect(customerAfterLayaway.id).toBe(customerAtSale.id);
-        }
+        const persisted = await fetchPersistedOrder(page, orderId as number);
+        const persistedCustomer = persisted.customer as { id?: number; group_id?: number } | undefined;
+        expect(Number(persisted.customer_id ?? persistedCustomer?.id)).toBe(customerAtSale.id);
+        expect(Number(persistedCustomer?.group_id ?? persisted.group_id)).toBe(customerAtSale.group_id);
+        expect(String(persisted.payment_status)).toBe('partially_paid');
+        const payments = Array.isArray(persisted.payments) ? persisted.payments : [];
+        expect(payments.length).toBeGreaterThan(0);
+        const paidTotal = payments.reduce((sum, payment) => sum + Number((payment as { value?: number }).value ?? 0), 0);
+        expect(paidTotal).toBeCloseTo(expectedMinimum, 1);
+        expect(Number(persisted.tendered ?? paidTotal)).toBeCloseTo(expectedMinimum, 1);
 
         await page.goto('/dashboard/zash-dine/floor');
         await expectTableStatus(page, created.tableName, 'Occupied');
         const afterLayaway = await readFloorTable(page, created.tableName);
         expect(afterLayaway?.order?.payment_status).toBe('partially_paid');
-        orderId = afterLayaway?.current_order_id ?? orderId;
+        expect(afterLayaway?.current_order_id).toBe(orderId);
     } finally {
         if (restoredGroupId !== null && restoredMinimalPayment !== null) {
             await setCustomerGroupMinimalCreditPayment(page, restoredGroupId, restoredMinimalPayment).catch(() => undefined);
@@ -138,26 +150,28 @@ test('invalid payment rules fail closed without writes or customer substitution'
         const before = await readPosCustomer(page);
         expect(before.id).toBe(customerAtSale.id);
         expect(before.minimal_credit_payment).toBe(25);
+        await expectPaymentRuleTypeMatrix(page);
 
-        for (const malformed of ['', 'abc', 'nan', 'missing-group'] as const) {
+        const malformedCases: Array<unknown | 'missing-group' | 'nan'> = [
+            '',
+            'abc',
+            'nan',
+            'missing-group',
+            false,
+            true,
+            [],
+            {},
+        ];
+
+        for (const malformed of malformedCases) {
             await mutatePosCustomerGroupRule(page, malformed);
             const during = await readPosCustomer(page);
             expect(during.id).toBe(customerAtSale.id);
 
-            await expectNoOrderWrites(page, async () => {
-                await page.locator('#pay-button').click();
-                await expect(page.locator('#snack-wrapper')).toContainText(/payment rules are unavailable or invalid|payment rules unavailable/i, {
-                    timeout: 10000,
-                }).catch(async () => {
-                    const payment = page.locator('#ns-payment-popup');
-                    if (await payment.isVisible().catch(() => false)) {
-                        await expect(payment.getByText(/Payment rules unavailable/i)).toBeVisible();
-                        await expect(payment.getByRole('button', { name: /Layaway/ })).toHaveCount(0);
-                        await payment.locator('.ns-close-button:visible').click();
-                        await expect(payment).toBeHidden({ timeout: 15000 });
-                    } else {
-                        throw new Error(`Malformed rule ${String(malformed)} did not block payment.`);
-                    }
+            await expectNoUnexpectedPageErrors(page, async () => {
+                await expectNoOrderWrites(page, async () => {
+                    await page.locator('#pay-button').click();
+                    await expectPaymentRulesBlocked(page);
                 });
             });
 
@@ -184,18 +198,11 @@ test('invalid payment rules fail closed without writes or customer substitution'
         await unpaid.locator('[data-order-id]').filter({ hasText: occupied?.order?.code ?? '' }).getByRole('button', { name: 'Open' }).click();
         await expect(page.locator('#cart-products-table')).toContainText(product.name);
 
-        await expectNoOrderWrites(page, async () => {
-            await page.locator('#pay-button').click();
-            const payment = page.locator('#ns-payment-popup');
-            const snack = page.locator('#snack-wrapper');
-            await expect.poll(async () => {
-                return (await payment.isVisible().catch(() => false)) || (await snack.isVisible().catch(() => false));
-            }).toBe(true);
-
-            if (await payment.isVisible().catch(() => false)) {
-                await expect(payment.getByText(/Payment rules unavailable/i)).toBeVisible();
-                await payment.locator('.ns-close-button:visible').click();
-            }
+        await expectNoUnexpectedPageErrors(page, async () => {
+            await expectNoOrderWrites(page, async () => {
+                await page.locator('#pay-button').click();
+                await expectPaymentRulesBlocked(page);
+            });
         });
 
         const afterIntercept = await readPosCustomer(page);
@@ -232,6 +239,7 @@ test('valid zero group minimum still allows layaway without forcing an initial p
 
         const occupied = await readFloorTable(page, created.tableName);
         orderId = occupied?.current_order_id ?? null;
+        expect(orderId).not.toBeNull();
 
         await openPos(page);
         await openOrderFromTab(page, 'Unpaid', occupied?.order?.code ?? '');
@@ -244,14 +252,21 @@ test('valid zero group minimum still allows layaway without forcing an initial p
         expect(displayedMinimum).toBe(0);
 
         await layaway.getByRole('button', { name: 'Skip Instalments' }).click();
-        await expect(page.locator('#confirm-popup').filter({ hasText: /Initial Payment/i })).toBeHidden({ timeout: 5000 }).catch(() => undefined);
+        await expect(page.locator('#confirm-popup').filter({ hasText: /Initial Payment/i })).toBeHidden({ timeout: 5000 });
         await expect(page.locator('#ns-payment-popup')).toBeHidden({ timeout: 30000 });
+
+        const persisted = await fetchPersistedOrder(page, orderId as number);
+        expect(Number(persisted.customer_id ?? (persisted.customer as { id?: number } | undefined)?.id)).toBe(customerAtSale.id);
+        expect(String(persisted.payment_status)).toBe('unpaid');
+        const payments = Array.isArray(persisted.payments) ? persisted.payments : [];
+        expect(payments).toEqual([]);
+        expect(Number(persisted.tendered ?? 0)).toBe(0);
 
         await page.goto('/dashboard/zash-dine/floor');
         await expectTableStatus(page, created.tableName, 'Occupied');
         const after = await readFloorTable(page, created.tableName);
-        expect(['unpaid', 'partially_paid']).toContain(after?.order?.payment_status);
-        orderId = after?.current_order_id ?? orderId;
+        expect(after?.order?.payment_status).toBe('unpaid');
+        expect(after?.current_order_id).toBe(orderId);
     } finally {
         if (restoredGroupId !== null && restoredMinimalPayment !== null) {
             await setCustomerGroupMinimalCreditPayment(page, restoredGroupId, restoredMinimalPayment).catch(() => undefined);

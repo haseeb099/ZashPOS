@@ -166,17 +166,23 @@ export async function readPosCustomer(page: Page): Promise<PosCustomerSnapshot> 
 }
 
 function isFinitePaymentRule(value: unknown): boolean {
-    if (value === undefined || value === null) {
-        return false;
+    if (typeof value === 'number') {
+        return Number.isFinite(value) && value >= 0;
     }
 
-    if (typeof value === 'string' && value.trim() === '') {
-        return false;
+    if (typeof value === 'string') {
+        const trimmed = value.trim();
+
+        if (trimmed === '') {
+            return false;
+        }
+
+        const percent = Number(trimmed);
+
+        return Number.isFinite(percent) && percent >= 0;
     }
 
-    const percent = Number(typeof value === 'string' ? value.trim() : value);
-
-    return Number.isFinite(percent) && percent >= 0;
+    return false;
 }
 
 async function ensureOrderReady(page: Page): Promise<void> {
@@ -208,17 +214,24 @@ async function ensureOrderReady(page: Page): Promise<void> {
         }
 
         const raw = current?.customer?.group?.minimal_credit_payment;
-        if (raw === undefined || raw === null) {
-            return false;
+
+        if (typeof raw === 'number') {
+            return Number.isFinite(raw) && raw >= 0;
         }
 
-        if (typeof raw === 'string' && raw.trim() === '') {
-            return false;
+        if (typeof raw === 'string') {
+            const trimmed = raw.trim();
+
+            if (trimmed === '') {
+                return false;
+            }
+
+            const percent = Number(trimmed);
+
+            return Number.isFinite(percent) && percent >= 0;
         }
 
-        const percent = Number(typeof raw === 'string' ? raw.trim() : raw);
-
-        return Number.isFinite(percent) && percent >= 0;
+        return false;
     })).toBe(true);
 }
 
@@ -388,6 +401,154 @@ export async function expectNoOrderWrites(page: Page, action: () => Promise<void
         expect(writes, `Unexpected order writes:\n${writes.join('\n')}`).toEqual([]);
     } finally {
         page.off('request', onRequest);
+    }
+}
+
+const PAYMENT_RULE_SNACK = /Customer payment rules are unavailable or invalid/i;
+const PAYMENT_RULE_CONTROL = /Payment rules unavailable/i;
+
+/**
+ * Require the specific unavailable/invalid payment-rule UI.
+ * An arbitrary snack is not enough.
+ */
+export async function expectPaymentRulesBlocked(page: Page): Promise<void> {
+    const payment = page.locator('#ns-payment-popup');
+
+    const detect = async (): Promise<'snack' | 'blocked-controls' | 'waiting'> => {
+        return page.evaluate(({ snackPattern, controlPattern }) => {
+            const snackText = (document.querySelector('#snack-wrapper')?.textContent ?? '').trim();
+            if (new RegExp(snackPattern, 'i').test(snackText)) {
+                return 'snack';
+            }
+
+            const popup = document.querySelector('#ns-payment-popup');
+            if (! popup) {
+                return 'waiting';
+            }
+
+            const buttons = Array.from(popup.querySelectorAll('button'));
+            const blocked = buttons.some((button) => {
+                if (! new RegExp(controlPattern, 'i').test(button.textContent ?? '')) {
+                    return false;
+                }
+
+                const style = window.getComputedStyle(button);
+
+                return style.display !== 'none' && style.visibility !== 'hidden' && button.getClientRects().length > 0;
+            });
+
+            return blocked ? 'blocked-controls' : 'waiting';
+        }, {
+            snackPattern: 'Customer payment rules are unavailable or invalid',
+            controlPattern: 'Payment rules unavailable',
+        });
+    };
+
+    await expect.poll(async () => detect(), { timeout: 20000 }).not.toBe('waiting');
+
+    if ((await detect()) === 'blocked-controls' || await payment.isVisible().catch(() => false)) {
+        expect(await detect()).toBe('blocked-controls');
+        const enabledLayaway = await payment.locator('button:visible').filter({ hasText: /^Layaway/ }).count();
+        expect(enabledLayaway).toBe(0);
+        await payment.locator('.ns-close-button:visible').click();
+        await expect(payment).toBeHidden({ timeout: 15000 });
+    } else {
+        await expect(page.locator('#snack-wrapper')).toContainText(PAYMENT_RULE_SNACK);
+    }
+}
+
+export async function expectNoUnexpectedPageErrors(page: Page, action: () => Promise<void>): Promise<void> {
+    const logs: string[] = [];
+    const onConsole = (message: { type: () => string; text: () => string }): void => {
+        if (message.type() === 'error') {
+            logs.push(`console: ${message.text()}`);
+        }
+    };
+    const onPageError = (error: Error): void => {
+        logs.push(`pageerror: ${error.stack ?? error.message}`);
+    };
+
+    page.on('console', onConsole);
+    page.on('pageerror', onPageError);
+
+    try {
+        await action();
+        const relevant = logs.filter((entry) => !IGNORED_PAYMENT_CONSOLE.some((pattern) => pattern.test(entry)));
+        expect(relevant, `Unexpected page errors:\n${relevant.join('\n')}`).toEqual([]);
+    } finally {
+        page.off('console', onConsole);
+        page.off('pageerror', onPageError);
+    }
+}
+
+/**
+ * Assert POS.resolveMinimalCreditPaymentPercent rejects invalid types
+ * and accepts valid numeric / numeric-string / zero values.
+ */
+export async function expectPaymentRuleTypeMatrix(page: Page): Promise<void> {
+    const result = await page.evaluate(() => {
+        const pos = (window as unknown as {
+            POS?: {
+                resolveMinimalCreditPaymentPercent?: (order: unknown) => number;
+                order?: {
+                    getValue?: () => {
+                        customer?: {
+                            group?: Record<string, unknown> | null;
+                        };
+                    };
+                };
+            };
+        }).POS;
+
+        if (typeof pos?.resolveMinimalCreditPaymentPercent !== 'function') {
+            throw new Error('POS.resolveMinimalCreditPaymentPercent is unavailable.');
+        }
+
+        const base = pos.order?.getValue?.() ?? { customer: { group: { id: 1 } } };
+        const probe = (value: unknown): { ok: boolean; percent?: number; message?: string } => {
+            try {
+                const customer = { ...(base as { customer?: Record<string, unknown> }).customer ?? {} };
+                const group = {
+                    ...((customer.group as Record<string, unknown> | null | undefined) ?? { id: 1 }),
+                    minimal_credit_payment: value,
+                };
+                customer.group = group;
+                const order = { ...(base as Record<string, unknown>), customer };
+                const percent = pos.resolveMinimalCreditPaymentPercent!(order);
+
+                return { ok: true, percent };
+            } catch (exception) {
+                const message = typeof exception === 'object' && exception && 'message' in exception
+                    ? String((exception as { message?: string }).message)
+                    : String(exception);
+
+                return { ok: false, message };
+            }
+        };
+
+        return {
+            acceptZero: probe(0),
+            acceptForty: probe(40),
+            acceptStringZero: probe('0'),
+            acceptStringForty: probe('40'),
+            rejectFalse: probe(false),
+            rejectTrue: probe(true),
+            rejectArray: probe([]),
+            rejectObject: probe({}),
+            rejectBlank: probe(''),
+            rejectNonnumeric: probe('abc'),
+            rejectNaN: probe(Number.NaN),
+            rejectNull: probe(null),
+        };
+    });
+
+    expect(result.acceptZero).toEqual({ ok: true, percent: 0 });
+    expect(result.acceptForty).toEqual({ ok: true, percent: 40 });
+    expect(result.acceptStringZero).toEqual({ ok: true, percent: 0 });
+    expect(result.acceptStringForty).toEqual({ ok: true, percent: 40 });
+    for (const key of ['rejectFalse', 'rejectTrue', 'rejectArray', 'rejectObject', 'rejectBlank', 'rejectNonnumeric', 'rejectNaN', 'rejectNull'] as const) {
+        expect(result[key].ok, `${key} should be rejected`).toBe(false);
+        expect(result[key].message ?? '', `${key} should mention payment rules`).toMatch(/payment rules/i);
     }
 }
 
