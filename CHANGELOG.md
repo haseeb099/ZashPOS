@@ -17,6 +17,7 @@ Tracks ZashPOS changes only, in Keep a Changelog style. Upstream NexoPOS notes s
 - Customer-group payment rules now fail closed for blank, nonnumeric, nonfinite, boolean, array and object `minimal_credit_payment` values (valid `0` and numeric strings still work). Layaway E2E covers the real popup minimum, below-minimum rejection, persisted initial-payment state, and malformed-rule blocking without order writes.
 - Reopened POS orders now include `customer.group` (and its `minimal_credit_payment` rule). Payment and layaway popups no longer crash when group data is missing; they block instead of silently relaxing the minimum. Playwright no longer reselects a customer before paying a reopened unpaid/held order.
 - ZashDine POS script waits for the deferred POS bundle before registering the dine-in table prompt, restores the table id when a held dine-in order is saved again, and sends a typed table id to the server even when that table is no longer in the free list.
+- Store timezone settings now offer only canonical IANA Zone identifiers. Obsolescent links such as `Canada/Pacific` are remapped at runtime (e.g. to `America/Vancouver`) so DateService/Carbon work on CI hosts whose tzdata omits backward-compatibility names. Existing saved legacy identifiers are normalized the same way without a database rewrite.
 
 ### Changed
 - ZashDine Floor is available to `zash.dine.waiter` or `zash.dine.manage`. Tables CRUD no longer lets staff set Occupied manually. Duplicate table names and areas with occupied tables return friendly errors.
