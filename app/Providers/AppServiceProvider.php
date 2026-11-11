@@ -35,6 +35,7 @@ use App\Services\ReportService;
 use App\Services\ResetService;
 use App\Services\SetupService;
 use App\Services\TaxService;
+use App\Services\TimezoneCatalog;
 use App\Services\TransactionService;
 use App\Services\UnitService;
 use App\Services\UpdateService;
@@ -63,6 +64,12 @@ class AppServiceProvider extends ServiceProvider
 
         AliasLoader::getInstance()->alias( 'Hook', Hook::class );
 
+        $configuredTimezones = config( 'nexopos.timezones' );
+
+        if ( is_array( $configuredTimezones ) ) {
+            config( [ 'nexopos.timezones' => TimezoneCatalog::offerable( $configuredTimezones ) ] );
+        }
+
         $this->app->singleton( Options::class, function () {
             return new Options;
         } );
@@ -88,9 +95,11 @@ class AppServiceProvider extends ServiceProvider
         // save Singleton for options
         $this->app->singleton( DateService::class, function () {
             $options = app()->make( Options::class );
-            $timeZone = $options->get( 'ns_datetime_timezone', 'Europe/London' );
+            $timeZone = TimezoneCatalog::canonicalize(
+                (string) $options->get( 'ns_datetime_timezone', 'Europe/London' )
+            );
 
-            config( ['app.timezone' => $timeZone ] );
+            config( [ 'app.timezone' => $timeZone ] );
             date_default_timezone_set( $timeZone );
 
             return new DateService( 'now', $timeZone );

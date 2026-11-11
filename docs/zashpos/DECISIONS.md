@@ -10,6 +10,7 @@
 | D-006 | One instance per client, no multi-tenancy for now | Simplest to ship |
 | D-007 | ZashMarket is a separate Laravel app, built after client #1 | Avoid premature work |
 | D-008 | Tests only for risky logic; the rest is manual QA | Speed |
+| D-012 | Offer and persist only canonical IANA Zone identifiers; remap obsolescent links (e.g. `Canada/Pacific` → `America/Vancouver`) via `TimezoneCatalog` | Backward Link names fail on some CI/system tzdata builds while preserving the same DST/offset rules as the Zone target |
 
 ## How to add a decision
 Add a row with the next ID, the decision and the reason.
