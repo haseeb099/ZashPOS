@@ -68,4 +68,4 @@ npm run report
 The host `phpunit.xml` includes a `ZashDine` testsuite (`modules/ZashDine/Tests`), so a plain `php artisan test --compact` run also executes the module tests.
 
 ## Status
-Phase 2b in progress (dine-in POS + waiter meal actions).
+Phase 2b ready for review on `phase-2b-dine-in-pos` (includes master timezone runtime remap from PR #27). Not merged; Phase 2c Vue popups not started.
