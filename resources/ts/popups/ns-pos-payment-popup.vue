@@ -34,16 +34,18 @@ export default {
     },
     computed: {
         hasCustomerPaymentRules() {
-            const group = this.order?.customer?.group;
+            if ( ! this.order ) {
+                return false;
+            }
 
-            return Boolean( group ) && group.minimal_credit_payment !== undefined && group.minimal_credit_payment !== null;
+            return POS.hasValidCustomerPaymentRules( this.order );
         },
         expectedPayment() {
             if ( ! this.hasCustomerPaymentRules ) {
                 return null;
             }
 
-            const minimalPaymentPercent     =   this.order.customer.group.minimal_credit_payment;
+            const minimalPaymentPercent     =   POS.resolveMinimalCreditPaymentPercent( this.order );
             return ( this.order.total * minimalPaymentPercent ) / 100;
         }
     },
@@ -140,7 +142,7 @@ export default {
         // no payment is necessary here so we'll proceed
         async submiAsUnpaid() {
             if ( ! this.hasCustomerPaymentRules ) {
-                return nsSnackBar.error( __( 'Customer payment rules are unavailable. Keep the current customer and reload the order.' ) );
+                return nsSnackBar.error( __( 'Customer payment rules are unavailable or invalid. Keep the current customer and reload the order.' ) );
             }
 
             return new Promise( ( resolve, reject ) => {
@@ -196,7 +198,7 @@ export default {
         },
         submitOrder( data = {}) {
             if ( ! this.hasCustomerPaymentRules ) {
-                return nsSnackBar.error( __( 'Customer payment rules are unavailable. Keep the current customer and reload the order.' ) );
+                return nsSnackBar.error( __( 'Customer payment rules are unavailable or invalid. Keep the current customer and reload the order.' ) );
             }
 
             const popup     =   Popup.show( nsPosLoadingPopupVue );

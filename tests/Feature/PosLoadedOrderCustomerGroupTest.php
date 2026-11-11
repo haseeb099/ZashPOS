@@ -164,6 +164,19 @@ class PosLoadedOrderCustomerGroupTest extends TestCase
                 (float) $heldPosResponse->json( 'customer.group.minimal_credit_payment' )
             );
             $this->assertSame( Order::PAYMENT_HOLD, $heldPosResponse->json( 'payment_status' ) );
+
+            $group->minimal_credit_payment = 0;
+            $group->save();
+
+            $zeroResponse = $this->withSession( $this->app[ 'session' ]->all() )
+                ->json( 'GET', 'api/pos/orders/' . $orderId );
+
+            $zeroResponse->assertOk();
+            $zeroResponse->assertJsonPath( 'customer.id', $customer->id );
+            $this->assertSame(
+                0.0,
+                (float) $zeroResponse->json( 'customer.group.minimal_credit_payment' )
+            );
         } finally {
             $group->minimal_credit_payment = $originalMinimalPayment;
             $group->save();

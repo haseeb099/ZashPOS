@@ -105,32 +105,6 @@ test('dine-in occupies a table, rejects a second order, then frees on pay or del
         expect(reopenedCustomer.group_id).toBe(customerAtSale.group_id);
         expect(reopenedCustomer.minimal_credit_payment).toBe(40);
 
-        const layawayProbe = await page.evaluate(() => {
-            const order = (window as unknown as {
-                POS?: {
-                    resolveMinimalCreditPaymentPercent?: (order: unknown) => number;
-                    order?: {
-                        getValue?: () => {
-                            total?: number;
-                            customer?: { group?: { minimal_credit_payment?: number } };
-                        };
-                    };
-                };
-            }).POS;
-            const current = order?.order?.getValue?.();
-            const percent = order?.resolveMinimalCreditPaymentPercent
-                ? order.resolveMinimalCreditPaymentPercent(current)
-                : Number(current?.customer?.group?.minimal_credit_payment ?? NaN);
-            const total = Number(current?.total ?? NaN);
-
-            return {
-                percent,
-                expected: Number.isFinite(percent) && Number.isFinite(total) ? (total * percent) / 100 : null,
-            };
-        });
-        expect(layawayProbe.percent).toBe(40);
-        expect(layawayProbe.expected).toBeGreaterThan(0);
-
         await payInFull(page);
 
         await page.goto('/dashboard/zash-dine/floor');

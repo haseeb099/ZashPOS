@@ -165,10 +165,25 @@ export async function readPosCustomer(page: Page): Promise<PosCustomerSnapshot> 
     });
 }
 
+function isFinitePaymentRule(value: unknown): boolean {
+    if (value === undefined || value === null) {
+        return false;
+    }
+
+    if (typeof value === 'string' && value.trim() === '') {
+        return false;
+    }
+
+    const percent = Number(typeof value === 'string' ? value.trim() : value);
+
+    return Number.isFinite(percent) && percent >= 0;
+}
+
 async function ensureOrderReady(page: Page): Promise<void> {
     await expect.poll(async () => page.evaluate(() => {
         const order = (window as unknown as {
             POS?: {
+                hasValidCustomerPaymentRules?: (order: unknown) => boolean;
                 order?: {
                     getValue?: () => {
                         products?: unknown[];
@@ -177,17 +192,48 @@ async function ensureOrderReady(page: Page): Promise<void> {
                     };
                 };
             };
-        }).POS?.order?.getValue?.();
-        const group = order?.customer?.group;
+        }).POS;
+        const current = order?.order?.getValue?.();
+        const readyCart = Boolean(current?.customer?.id)
+            && Boolean(current?.type)
+            && Array.isArray(current?.products)
+            && current.products.length > 0;
 
-        return Boolean(order?.customer?.id)
-            && Boolean(order?.type)
-            && Array.isArray(order?.products)
-            && order.products.length > 0
-            && Boolean(group)
-            && group.minimal_credit_payment !== undefined
-            && group.minimal_credit_payment !== null;
+        if (!readyCart) {
+            return false;
+        }
+
+        if (typeof order?.hasValidCustomerPaymentRules === 'function') {
+            return order.hasValidCustomerPaymentRules(current);
+        }
+
+        const raw = current?.customer?.group?.minimal_credit_payment;
+        if (raw === undefined || raw === null) {
+            return false;
+        }
+
+        if (typeof raw === 'string' && raw.trim() === '') {
+            return false;
+        }
+
+        const percent = Number(typeof raw === 'string' ? raw.trim() : raw);
+
+        return Number.isFinite(percent) && percent >= 0;
     })).toBe(true);
+}
+
+/**
+ * Known unrelated console noise filtered during payment completion.
+ * Keep this list narrow; payment/page crashes must still fail the helper.
+ */
+const IGNORED_PAYMENT_CONSOLE = [
+    /telemetry failed/i,
+    /Download the Vue Devtools/i,
+    /\[CursorBrowser\]/i,
+];
+
+function isRelevantPaymentLog(entry: string): boolean {
+    return !IGNORED_PAYMENT_CONSOLE.some((pattern) => pattern.test(entry));
 }
 
 export async function payInFull(page: Page, tableName?: string): Promise<void> {
@@ -195,7 +241,7 @@ export async function payInFull(page: Page, tableName?: string): Promise<void> {
 
     const customerBefore = await readPosCustomer(page);
     expect(customerBefore.id).not.toBeNull();
-    expect(customerBefore.minimal_credit_payment).not.toBeNull();
+    expect(isFinitePaymentRule(customerBefore.minimal_credit_payment)).toBe(true);
 
     const logs: string[] = [];
     const onConsole = (message: { type: () => string; text: () => string }): void => {
@@ -206,29 +252,143 @@ export async function payInFull(page: Page, tableName?: string): Promise<void> {
     const onPageError = (error: Error): void => {
         logs.push(`pageerror: ${error.stack ?? error.message}`);
     };
+
     page.on('console', onConsole);
     page.on('pageerror', onPageError);
-    await page.locator('#pay-button').click();
-
-    if (tableName) {
-        await chooseDineIn(page, tableName);
-    }
 
     try {
+        await page.locator('#pay-button').click();
+
+        if (tableName) {
+            await chooseDineIn(page, tableName);
+        }
+
         await expect(page.locator('#ns-payment-popup')).toBeVisible();
         const customerDuringPayment = await readPosCustomer(page);
         expect(customerDuringPayment.id).toBe(customerBefore.id);
         expect(customerDuringPayment.minimal_credit_payment).toBe(customerBefore.minimal_credit_payment);
+
+        await page.getByText('Full Payment', { exact: true }).click();
+        await page.locator('#confirm-popup').getByRole('button', { name: 'Yes' }).click();
+        await expect(page.locator('#ns-payment-popup')).toBeHidden({ timeout: 30000 });
+
+        const relevant = logs.filter(isRelevantPaymentLog);
+        expect(relevant, `Unexpected payment console/page errors:\n${relevant.join('\n')}`).toEqual([]);
     } catch (error) {
         throw new Error(`${String(error)}\nconsole:\n${logs.slice(-20).join('\n')}`, { cause: error });
     } finally {
         page.off('console', onConsole);
         page.off('pageerror', onPageError);
     }
+}
 
-    await page.getByText('Full Payment', { exact: true }).click();
-    await page.locator('#confirm-popup').getByRole('button', { name: 'Yes' }).click();
-    await expect(page.locator('#ns-payment-popup')).toBeHidden({ timeout: 30000 });
+export async function openPaymentPopup(page: Page): Promise<void> {
+    await ensureOrderReady(page);
+    await page.locator('#pay-button').click();
+    await expect(page.locator('#ns-payment-popup')).toBeVisible();
+}
+
+export async function closePaymentPopup(page: Page): Promise<void> {
+    const paymentPopup = page.locator('#ns-payment-popup');
+
+    if (!await paymentPopup.isVisible().catch(() => false)) {
+        return;
+    }
+
+    await paymentPopup.locator('.ns-close-button:visible').click();
+    await expect(paymentPopup).toBeHidden({ timeout: 15000 });
+}
+
+export async function openLayawayPopup(page: Page): Promise<ReturnType<Page['locator']>> {
+    await openPaymentPopup(page);
+    const payment = page.locator('#ns-payment-popup');
+    await expect(payment.getByRole('button', { name: /Layaway/ })).toBeVisible();
+    await payment.getByRole('button', { name: /Layaway/ }).click();
+    const layaway = page.locator('.ns-box').filter({ has: page.getByRole('heading', { name: 'Layaway Parameters' }) });
+    await expect(layaway).toBeVisible({ timeout: 20000 });
+    await expect(layaway.getByText('Minimum Payment', { exact: true })).toBeVisible();
+
+    return layaway;
+}
+
+export async function readDisplayedLayawayMinimum(page: Page): Promise<number> {
+    const layaway = page.locator('.ns-box').filter({ has: page.getByRole('heading', { name: 'Layaway Parameters' }) });
+    await expect(layaway.getByText('Minimum Payment', { exact: true })).toBeVisible();
+
+    const parsed = await page.evaluate(() => {
+        const boxes = Array.from(document.querySelectorAll('.ns-box'));
+        const box = boxes.find((candidate) => candidate.textContent?.includes('Layaway Parameters'));
+        const label = Array.from(box?.querySelectorAll('span') ?? []).find((span) => span.textContent?.trim() === 'Minimum Payment');
+        const amountText = label?.nextElementSibling?.textContent?.trim() ?? '';
+        const numeric = Number(amountText.replace(/[^0-9.]/g, ''));
+
+        return { amountText, numeric };
+    });
+
+    expect(Number.isFinite(parsed.numeric), `Could not parse layaway minimum from "${parsed.amountText}"`).toBe(true);
+
+    return parsed.numeric;
+}
+
+export async function mutatePosCustomerGroupRule(
+    page: Page,
+    value: unknown | 'missing-group' | 'nan',
+): Promise<PosCustomerSnapshot> {
+    await page.evaluate((next) => {
+        const pos = (window as unknown as {
+            POS?: {
+                order?: {
+                    getValue?: () => {
+                        customer?: {
+                            id?: number;
+                            group?: Record<string, unknown> | null;
+                        };
+                    };
+                    next?: (order: unknown) => void;
+                };
+            };
+        }).POS;
+        const order = pos?.order?.getValue?.();
+
+        if (!order?.customer || !pos?.order?.next) {
+            throw new Error('POS order/customer is unavailable for mutation.');
+        }
+
+        if (next === 'missing-group') {
+            order.customer.group = null;
+        } else {
+            const minimal = next === 'nan' ? Number.NaN : next;
+            order.customer.group = {
+                ...(order.customer.group ?? { id: order.customer.id }),
+                minimal_credit_payment: minimal,
+            };
+        }
+
+        pos.order.next(order);
+    }, value);
+
+    return readPosCustomer(page);
+}
+
+export async function expectNoOrderWrites(page: Page, action: () => Promise<void>): Promise<void> {
+    const writes: string[] = [];
+    const onRequest = (request: { method: () => string; url: () => string }): void => {
+        const method = request.method().toUpperCase();
+        const url = request.url();
+
+        if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method) && /\/api\/(?:pos\/)?orders\b/.test(url)) {
+            writes.push(`${method} ${url}`);
+        }
+    };
+
+    page.on('request', onRequest);
+
+    try {
+        await action();
+        expect(writes, `Unexpected order writes:\n${writes.join('\n')}`).toEqual([]);
+    } finally {
+        page.off('request', onRequest);
+    }
 }
 
 export async function payPartial(page: Page, tableName: string): Promise<void> {

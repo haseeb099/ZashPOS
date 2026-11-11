@@ -85,5 +85,7 @@ if ( ! $customer instanceof Customer ) {
 
 ns()->option->set( 'ns_customers_default', $customer->id );
 ns()->option->set( 'ns_customers_default_group', $group->id );
+ns()->option->set( 'ns_orders_allow_partial', 'yes' );
+ns()->option->set( 'ns_orders_allow_unpaid', 'yes' );
 
 echo 'E2E waiter and cashier users are ready.' . PHP_EOL;

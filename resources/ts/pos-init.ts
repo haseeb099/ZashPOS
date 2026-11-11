@@ -999,17 +999,58 @@ export class POS {
      * might request additionnal information through a popup.
      * @param order Order
      */
+    /**
+     * Customer-group minimum credit payment is a percentage.
+     * Backend stores a numeric value defaulting to 0 (no minimum) and
+     * casts with (float). Accept finite values >= 0, including numeric
+     * strings. Reject missing, blank, nonnumeric and nonfinite values.
+     */
     resolveMinimalCreditPaymentPercent(order: Order | any): number {
         const group = order?.customer?.group;
 
-        if ( group === undefined || group === null || group.minimal_credit_payment === undefined || group.minimal_credit_payment === null ) {
+        if ( group === undefined || group === null ) {
             throw {
                 status: 'error',
                 message: __( 'Customer payment rules are unavailable. Keep the current customer and reload the order.' ),
             };
         }
 
-        return Number( group.minimal_credit_payment );
+        const raw = group.minimal_credit_payment;
+
+        if ( raw === undefined || raw === null ) {
+            throw {
+                status: 'error',
+                message: __( 'Customer payment rules are unavailable. Keep the current customer and reload the order.' ),
+            };
+        }
+
+        if ( typeof raw === 'string' && raw.trim() === '' ) {
+            throw {
+                status: 'error',
+                message: __( 'Customer payment rules are invalid. Keep the current customer and reload the order.' ),
+            };
+        }
+
+        const percent = Number( typeof raw === 'string' ? raw.trim() : raw );
+
+        if ( ! Number.isFinite( percent ) || percent < 0 ) {
+            throw {
+                status: 'error',
+                message: __( 'Customer payment rules are invalid. Keep the current customer and reload the order.' ),
+            };
+        }
+
+        return percent;
+    }
+
+    hasValidCustomerPaymentRules(order: Order | any): boolean {
+        try {
+            this.resolveMinimalCreditPaymentPercent( order );
+
+            return true;
+        } catch ( exception ) {
+            return false;
+        }
     }
 
     canProceedAsLaidAway(_order: Order): { status: string, message: string, data: { order: Order } } | any {
