@@ -8,5 +8,8 @@ Tracks ZashPOS changes only, in Keep a Changelog style. Upstream NexoPOS notes s
 - ZashDine Phase 2a: native CRUDs for areas and tables (permission zash.dine.manage), unique (area_id, name) on tables, dashboard Floor view with 5s polling, and menu entries Areas / Tables / Floor.
 - ZashDine module skeleton (Phase 1): permissions zash.dine.manage, zash.dine.waiter, zash.dine.chef; tables zash_dine_areas, _tables, _kitchens, _kitchen_categories, _order_items, _modifier_groups, _modifiers; menu entry, settings page and an enable/disable smoke test.
 
+### Fixed
+- Store timezone settings now offer only canonical IANA Zone identifiers. Obsolescent links such as `Canada/Pacific` are remapped (e.g. to `America/Vancouver`) so DateService/Carbon work on CI hosts whose tzdata omits backward-compatibility names.
+
 ### Changed
 - Visible rebrand from NexoPOS to ZashPOS (Phase 0): dashboard header, auth/setup pages, logo, emails, lang files, README, composer.json and package.json names. Footer shows "Based on NexoPOS". Internal identifiers (namespaces, ns.* permissions, config keys) are unchanged.
