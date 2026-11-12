@@ -41,6 +41,7 @@ return [
             'database' => env( 'DB_DATABASE', database_path( 'database.sqlite' ) ),
             'prefix' => env( 'DB_PREFIX', '' ),
             'foreign_key_constraints' => env( 'DB_FOREIGN_KEYS', true ),
+            'busy_timeout' => (int) env( 'DB_BUSY_TIMEOUT', 10000 ),
         ],
 
         'mysql' => [

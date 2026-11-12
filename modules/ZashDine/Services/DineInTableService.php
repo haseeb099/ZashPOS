@@ -5,13 +5,16 @@ namespace Modules\ZashDine\Services;
 use App\Exceptions\NotAllowedException;
 use App\Models\Order;
 use App\Models\OrderProduct;
+use App\Models\Product;
 use App\Models\ProductHistory;
+use App\Models\ProductUnitQuantity;
 use App\Services\OrdersService;
 use App\Services\ProductService;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Modules\ZashDine\Models\DiningTable;
 use Modules\ZashDine\Models\OrderItem;
+use Throwable;
 
 class DineInTableService
 {
@@ -63,7 +66,7 @@ class DineInTableService
 
     public function assignOrderToTable( Order $order, array $fields ): void
     {
-        $type = $fields['type']['identifier'] ?? $order->type ?? null;
+        $type = $fields['type']['identifier'] ?? $fields['type'] ?? $order->type ?? null;
 
         if ( $type !== self::ORDER_TYPE ) {
             return;
@@ -71,7 +74,26 @@ class DineInTableService
 
         $tableId = (int) ( $fields[self::TABLE_FIELD] ?? 0 );
 
+        /**
+         * NsModel::saveWithRelationships fires "created" after saveMany even on
+         * updates. That re-entry may omit the table field; reuse the table this
+         * order already occupies so routing can refresh from persisted products.
+         */
         if ( $tableId < 1 ) {
+            $existingTable = DiningTable::query()
+                ->where( 'current_order_id', $order->id )
+                ->first();
+
+            if ( $existingTable instanceof DiningTable ) {
+                $this->syncOrderItems( $order, $existingTable, preferPersistedProducts: true );
+
+                if ( $this->shouldReleaseTable( $order->payment_status ) ) {
+                    $this->releaseTableForOrder( $order );
+                }
+
+                return;
+            }
+
             throw new NotAllowedException(
                 __m( 'Dine-in orders require a table selection.', 'ZashDine' )
             );
@@ -79,10 +101,28 @@ class DineInTableService
 
         /**
          * Runs inside OrdersService::create()'s DB::transaction. lockForUpdate
-         * serialises concurrent waiters; throwing rolls the whole order back.
+         * serialises concurrent waiters on first occupy; throwing rolls the whole
+         * order back. Skip a second lock when this order already owns the table —
+         * NsModel may re-enter via "created" after saveMany while the order row is
+         * already locked, and SQLite can then raise "database is locked".
          *
          * @var DiningTable|null $table
          */
+        $alreadyOwned = DiningTable::query()
+            ->whereKey( $tableId )
+            ->where( 'current_order_id', $order->id )
+            ->first();
+
+        if ( $alreadyOwned instanceof DiningTable ) {
+            $this->syncOrderItems( $order, $alreadyOwned, preferPersistedProducts: true );
+
+            if ( $this->shouldReleaseTable( $order->payment_status ) ) {
+                $this->releaseTableForOrder( $order );
+            }
+
+            return;
+        }
+
         $table = DiningTable::query()
             ->whereKey( $tableId )
             ->lockForUpdate()
@@ -104,7 +144,7 @@ class DineInTableService
         $table->status = DiningTable::STATUS_OCCUPIED;
         $table->save();
 
-        $this->syncOrderItems( $order, $table );
+        $this->syncOrderItems( $order, $table, preferPersistedProducts: true );
 
         if ( $this->shouldReleaseTable( $order->payment_status ) ) {
             $this->releaseTableForOrder( $order );
@@ -127,7 +167,12 @@ class DineInTableService
             return;
         }
 
-        $this->syncOrderItems( $order, $table );
+        /**
+         * "updated" may fire inside saveWithRelationships before saveMany persists
+         * product identity changes. Keep in-memory relations for that pass; the
+         * subsequent created re-entry reloads from DB via assignOrderToTable.
+         */
+        $this->syncOrderItems( $order, $table, preferPersistedProducts: false );
     }
 
     /**
@@ -194,8 +239,10 @@ class DineInTableService
      * and cleaned up after update via abandonDineInStateForOrder().
      *
      * Acquires the same order → order_item lock order used by kitchen transitions and
-     * Floor cancel before reading products/statuses. Runs inside OrdersService::persistOrder's
-     * transaction so the lock is held through mutation and kitchen sync.
+     * Floor cancel before reading products/statuses. Protection is evaluated from those
+     * locked OrderItem rows (not a second unlocked re-query). Runs inside
+     * OrdersService::persistOrder's transaction so the lock is held through mutation
+     * and kitchen sync.
      *
      * SQLite does not provide production-grade concurrent lockForUpdate; this serialises
      * sequential writers and keeps a consistent lock order, not multi-writer proof.
@@ -224,7 +271,12 @@ class DineInTableService
         $lockedOrder->unsetRelation( 'products' );
         $lockedOrder->load( [ 'products' ] );
 
-        OrderItem::query()
+        /**
+         * Lock all kitchen rows for this order, then evaluate protection from that
+         * locked collection. Avoid a second unlocked status read that could diverge
+         * from the locked snapshot under engines with stronger isolation.
+         */
+        $lockedItems = OrderItem::query()
             ->where( 'order_id', $lockedOrder->id )
             ->lockForUpdate()
             ->get();
@@ -234,10 +286,8 @@ class DineInTableService
         }
 
         $incomingType = $this->resolveIncomingOrderType( $fields, $lockedOrder );
-        $protectedItems = OrderItem::query()
-            ->where( 'order_id', $lockedOrder->id )
-            ->whereIn( 'status', OrderItem::cancelRequiresManageStatuses() )
-            ->get()
+        $protectedItems = $lockedItems
+            ->filter( fn ( OrderItem $item ) => in_array( $item->status, OrderItem::cancelRequiresManageStatuses(), true ) )
             ->keyBy( 'order_product_id' );
 
         if ( $incomingType !== self::ORDER_TYPE ) {
@@ -327,32 +377,39 @@ class DineInTableService
      * Detect product identity / unit swaps that would let __saveOrderProducts overwrite
      * a protected line while keeping the same order_product id and quantity.
      *
+     * Mirrors OrdersService::__buildOrderProducts resolution: product_id or sku yields
+     * the catalog product that will be persisted. Client identifiers are not trusted to
+     * be mutually consistent — unit_quantity_id must belong to the resolved product.
+     *
      * @param  array<string, mixed>  $incoming
      */
     protected function protectedMealIdentityChanged( OrderProduct $existing, array $incoming ): bool
     {
         $existingProductId = (int) ( $existing->product_id ?? 0 );
-        $incomingHasProductId = array_key_exists( 'product_id', $incoming );
-        $incomingProductId = $incomingHasProductId ? (int) ( $incoming['product_id'] ?? 0 ) : null;
         $incomingMode = (string) ( $incoming['mode'] ?? 'normal' );
+        $resolvedProduct = $this->resolveIncomingCatalogProduct( $incoming );
+        $resolvedProductId = $resolvedProduct instanceof Product ? (int) $resolvedProduct->id : 0;
 
-        if ( $incomingHasProductId && $incomingProductId !== $existingProductId ) {
+        if ( $incomingMode === 'custom' || $resolvedProductId < 1 ) {
+            if ( $existingProductId > 0 ) {
+                return true;
+            }
+
+            if (
+                isset( $incoming['name'] )
+                && (string) $incoming['name'] !== (string) $existing->name
+            ) {
+                return true;
+            }
+        } elseif ( $resolvedProductId !== $existingProductId ) {
             return true;
         }
 
-        // Catalog → custom: omitting or clearing product_id (and sku) makes core treat the line as custom.
-        if ( $existingProductId > 0 ) {
-            if ( $incomingMode === 'custom' ) {
-                return true;
-            }
-
-            if ( ! $incomingHasProductId && empty( $incoming['sku'] ?? null ) ) {
-                return true;
-            }
-
-            if ( $incomingHasProductId && $incomingProductId < 1 ) {
-                return true;
-            }
+        if (
+            $resolvedProduct instanceof Product
+            && ! $this->incomingUnitQuantityBelongsToProduct( $incoming, $resolvedProduct )
+        ) {
+            return true;
         }
 
         if ( isset( $incoming['unit_id'] ) && (int) $incoming['unit_id'] !== (int) $existing->unit_id ) {
@@ -366,19 +423,69 @@ class DineInTableService
             return true;
         }
 
-        if (
-            $existingProductId < 1
-            && isset( $incoming['name'] )
-            && (string) $incoming['name'] !== (string) $existing->name
-        ) {
-            return true;
-        }
-
         return false;
     }
 
-    public function syncOrderItems( Order $order, DiningTable $table ): void
+    /**
+     * Resolve the catalog product the same way OrdersService::__buildOrderProducts does:
+     * product_id wins when present, otherwise sku. Custom / empty identifiers → null.
+     *
+     * @param  array<string, mixed>  $incoming
+     */
+    protected function resolveIncomingCatalogProduct( array $incoming ): ?Product
     {
+        if ( (string) ( $incoming['mode'] ?? 'normal' ) === 'custom' ) {
+            return null;
+        }
+
+        $productId = (int) ( $incoming['product_id'] ?? 0 );
+        $sku = $incoming['sku'] ?? null;
+
+        if ( $productId < 1 && empty( $sku ) ) {
+            return null;
+        }
+
+        try {
+            if ( $productId > 0 ) {
+                return $this->productService->get( $productId );
+            }
+
+            return $this->productService->getProductUsingSKUOrFail( (string) $sku );
+        } catch ( Throwable ) {
+            return null;
+        }
+    }
+
+    /**
+     * Reject payloads where unit_quantity_id does not belong to the resolved product,
+     * even if the client also sent a matching product_id or sku for another product.
+     *
+     * @param  array<string, mixed>  $incoming
+     */
+    protected function incomingUnitQuantityBelongsToProduct( array $incoming, Product $product ): bool
+    {
+        if ( ! array_key_exists( 'unit_quantity_id', $incoming ) ) {
+            return true;
+        }
+
+        $unitQuantityId = (int) ( $incoming['unit_quantity_id'] ?? 0 );
+
+        if ( $unitQuantityId < 1 ) {
+            return false;
+        }
+
+        return ProductUnitQuantity::query()
+            ->whereKey( $unitQuantityId )
+            ->where( 'product_id', $product->id )
+            ->exists();
+    }
+
+    public function syncOrderItems( Order $order, DiningTable $table, bool $preferPersistedProducts = false ): void
+    {
+        if ( $preferPersistedProducts ) {
+            $order->unsetRelation( 'products' );
+        }
+
         $order->loadMissing( 'products' );
 
         $activeProductIds = $order->products
@@ -423,10 +530,12 @@ class DineInTableService
             if ( ! $item->exists ) {
                 $item->status = OrderItem::STATUS_PENDING;
                 $item->kitchen_id = $this->kitchenService->resolveKitchenIdForOrderProduct( $product );
-            } elseif ( $item->status === OrderItem::STATUS_PENDING && $item->kitchen_id === null ) {
+            } elseif ( $item->status === OrderItem::STATUS_PENDING ) {
                 /**
-                 * Fill routing only while still pending and unassigned. Never
-                 * reassign or reset status once preparation has started.
+                 * While pending, always re-resolve kitchen routing so a same-line
+                 * product replacement (Grill→Bar / Grill→Unassigned) updates kitchen_id.
+                 * Unchanged identity resolves to the same kitchen. Never reassign or
+                 * reset status once preparation has started.
                  */
                 $item->kitchen_id = $this->kitchenService->resolveKitchenIdForOrderProduct( $product );
             }
