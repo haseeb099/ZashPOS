@@ -22,6 +22,7 @@ class DineInTableService
     public function __construct(
         protected OrdersService $ordersService,
         protected ProductService $productService,
+        protected KitchenService $kitchenService,
     ) {
         //
     }
@@ -190,6 +191,13 @@ class DineInTableService
 
             if ( ! $item->exists ) {
                 $item->status = OrderItem::STATUS_PENDING;
+                $item->kitchen_id = $this->kitchenService->resolveKitchenIdForOrderProduct( $product );
+            } elseif ( $item->status === OrderItem::STATUS_PENDING && $item->kitchen_id === null ) {
+                /**
+                 * Fill routing only while still pending and unassigned. Never
+                 * reassign or reset status once preparation has started.
+                 */
+                $item->kitchen_id = $this->kitchenService->resolveKitchenIdForOrderProduct( $product );
             }
 
             $item->save();
@@ -205,6 +213,8 @@ class DineInTableService
                 __m( 'This meal is already cancelled.', 'ZashDine' )
             );
         }
+
+        $this->assertCancelAllowedForKitchenStatus( $orderItem );
 
         $order = Order::query()->with( ['products', 'payments'] )->find( $orderItem->order_id );
 
@@ -273,6 +283,19 @@ class DineInTableService
         if ( $hasPayments ) {
             throw new NotAllowedException(
                 __m( 'This order has payments. Use a refund instead.', 'ZashDine' )
+            );
+        }
+    }
+
+    public function assertCancelAllowedForKitchenStatus( OrderItem $orderItem ): void
+    {
+        if ( ! in_array( $orderItem->status, OrderItem::cancelRequiresManageStatuses(), true ) ) {
+            return;
+        }
+
+        if ( ! ns()->allowedTo( 'zash.dine.manage' ) ) {
+            throw new NotAllowedException(
+                __m( 'Only a manager can cancel a meal after kitchen preparation has started.', 'ZashDine' )
             );
         }
     }

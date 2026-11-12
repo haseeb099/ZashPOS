@@ -4,6 +4,7 @@ use App\Http\Middleware\NsRestrictAnyMiddleware;
 use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Support\Facades\Route;
 use Modules\ZashDine\Http\Controllers\FloorController;
+use Modules\ZashDine\Http\Controllers\KitchenScreenController;
 use Modules\ZashDine\Http\Controllers\OrderItemsController;
 use Modules\ZashDine\Http\Controllers\TablesController;
 
@@ -19,4 +20,15 @@ Route::middleware( [
         ->name( 'zash-dine.api.order-items.cancel' );
     Route::put( 'order-items/{orderItem}/note', [OrderItemsController::class, 'updateNote'] )
         ->name( 'zash-dine.api.order-items.note' );
+} );
+
+Route::middleware( [
+    SubstituteBindings::class,
+    'auth:sanctum',
+    NsRestrictAnyMiddleware::class . ':zash.dine.chef,zash.dine.manage',
+] )->prefix( 'zash-dine' )->group( function () {
+    Route::get( 'kitchen/tickets', [KitchenScreenController::class, 'tickets'] )
+        ->name( 'zash-dine.api.kitchen.tickets' );
+    Route::post( 'order-items/{orderItem}/kitchen-status', [KitchenScreenController::class, 'transition'] )
+        ->name( 'zash-dine.api.order-items.kitchen-status' );
 } );

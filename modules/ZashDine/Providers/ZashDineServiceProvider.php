@@ -7,6 +7,7 @@ use App\Classes\Hook;
 use Illuminate\Support\ServiceProvider;
 use Modules\ZashDine\Crud\AreaCrud;
 use Modules\ZashDine\Crud\DiningTableCrud;
+use Modules\ZashDine\Crud\KitchenCrud;
 
 class ZashDineServiceProvider extends ServiceProvider
 {
@@ -20,6 +21,7 @@ class ZashDineServiceProvider extends ServiceProvider
             return match ( $resource ) {
                 AreaCrud::IDENTIFIER, AreaCrud::class => AreaCrud::class,
                 DiningTableCrud::IDENTIFIER, DiningTableCrud::class => DiningTableCrud::class,
+                KitchenCrud::IDENTIFIER, KitchenCrud::class => KitchenCrud::class,
                 default => $resource,
             };
         } );
@@ -40,7 +42,7 @@ class ZashDineServiceProvider extends ServiceProvider
                 label: __m( 'ZashDine', 'ZashDine' ),
                 identifier: 'zash-dine',
                 icon: 'la-utensils',
-                permissions: ['zash.dine.manage', 'zash.dine.waiter'],
+                permissions: ['zash.dine.manage', 'zash.dine.waiter', 'zash.dine.chef'],
                 childrens: AsideMenu::childrens(
                     AsideMenu::subMenu(
                         label: __m( 'Areas', 'ZashDine' ),
@@ -55,10 +57,22 @@ class ZashDineServiceProvider extends ServiceProvider
                         permissions: ['zash.dine.manage']
                     ),
                     AsideMenu::subMenu(
+                        label: __m( 'Kitchens', 'ZashDine' ),
+                        identifier: 'zash-dine-kitchens',
+                        href: ns()->route( 'zash-dine.kitchens.list' ),
+                        permissions: ['zash.dine.manage']
+                    ),
+                    AsideMenu::subMenu(
                         label: __m( 'Floor', 'ZashDine' ),
                         identifier: 'zash-dine-floor',
                         href: ns()->route( 'zash-dine.floor' ),
                         permissions: ['zash.dine.waiter', 'zash.dine.manage']
+                    ),
+                    AsideMenu::subMenu(
+                        label: __m( 'Kitchen', 'ZashDine' ),
+                        identifier: 'zash-dine-kitchen-screen',
+                        href: ns()->route( 'zash-dine.kitchen' ),
+                        permissions: ['zash.dine.chef', 'zash.dine.manage']
                     ),
                     AsideMenu::subMenu(
                         label: __m( 'Settings', 'ZashDine' ),

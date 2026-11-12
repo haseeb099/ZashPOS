@@ -11,6 +11,7 @@ async function globalSetup(_config: FullConfig): Promise<void> {
         ['admin', process.env.E2E_ADMIN_USER, process.env.E2E_ADMIN_PASSWORD],
         ['waiter', process.env.E2E_WAITER_USER, process.env.E2E_WAITER_PASSWORD],
         ['cashier', process.env.E2E_CASHIER_USER, process.env.E2E_CASHIER_PASSWORD],
+        ['chef', process.env.E2E_CHEF_USER, process.env.E2E_CHEF_PASSWORD],
     ] as const;
 
     fs.mkdirSync(e2ePath('auth-state'), { recursive: true });

@@ -16,6 +16,6 @@ export async function login(page: Page, username: string, password: string): Pro
     await expect(page).toHaveURL(/\/dashboard/, { timeout: 30000 });
 }
 
-export function authState(role: 'admin' | 'waiter' | 'cashier'): string {
+export function authState(role: 'admin' | 'waiter' | 'cashier' | 'chef'): string {
     return `auth-state/${role}.json`;
 }

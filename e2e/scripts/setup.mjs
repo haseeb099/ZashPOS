@@ -113,6 +113,8 @@ requireEnv('E2E_WAITER_USER');
 requireEnv('E2E_WAITER_PASSWORD');
 requireEnv('E2E_CASHIER_USER');
 requireEnv('E2E_CASHIER_PASSWORD');
+requireEnv('E2E_CHEF_USER');
+requireEnv('E2E_CHEF_PASSWORD');
 
 ensureLaravelEnv();
 
@@ -153,7 +155,7 @@ artisanOrFail(['ns:products:generate', '--count=30']);
 const provision = path.join(e2eRoot, 'scripts', 'provision.php').replace(/\\/g, '/');
 const provisioned = artisan(['tinker', '--execute', `require '${provision}';`]);
 
-if (provisioned.status !== 0 || !provisioned.output.includes('E2E waiter and cashier users are ready.')) {
-    throw new Error('Unable to create the Playwright waiter and cashier users.');
+if (provisioned.status !== 0 || !provisioned.output.includes('E2E waiter, cashier and chef users are ready.')) {
+    throw new Error('Unable to create the Playwright waiter, cashier and chef users.');
 }
 artisanOrFail(['cache:clear']);

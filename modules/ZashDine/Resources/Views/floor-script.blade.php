@@ -21,6 +21,10 @@
         cancelMeal: @json( __m( 'Cancel meal', 'ZashDine' ) ),
         addNote: @json( __m( 'Add note', 'ZashDine' ) ),
         cancelled: @json( __m( 'Cancelled', 'ZashDine' ) ),
+        preparing: @json( __m( 'Preparing', 'ZashDine' ) ),
+        ready: @json( __m( 'Ready', 'ZashDine' ) ),
+        rejected: @json( __m( 'Rejected', 'ZashDine' ) ),
+        pending: @json( __m( 'Pending', 'ZashDine' ) ),
         noteSaved: @json( __m( 'Note saved.', 'ZashDine' ) ),
         mealCancelled: @json( __m( 'Meal cancelled.', 'ZashDine' ) ),
         confirmCancel: @json( __m( 'Cancel this meal? It will be removed from the unpaid bill.', 'ZashDine' ) ),
@@ -190,6 +194,10 @@
                                         <p class="text-fontcolor">
                                             @{{ item.quantity }} × @{{ item.name || ('#' + item.id) }}
                                             <span v-if="item.status === 'cancelled'">(@{{ labels.cancelled }})</span>
+                                            <span v-else-if="item.status === 'preparing'">(@{{ labels.preparing }})</span>
+                                            <span v-else-if="item.status === 'ready'">(@{{ labels.ready }})</span>
+                                            <span v-else-if="item.status === 'rejected'">(@{{ labels.rejected }})</span>
+                                            <span v-else-if="item.status === 'pending'">(@{{ labels.pending }})</span>
                                         </p>
                                         <p v-if="item.note">@{{ item.note }}</p>
                                         <div class="mt-2 flex gap-2" v-if="item.status !== 'cancelled'">

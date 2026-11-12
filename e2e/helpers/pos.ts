@@ -42,7 +42,16 @@ export async function addProduct(page: Page, productName: string): Promise<void>
                 break;
             }
 
-            await page.locator('#grid-breadcrumb').getByRole('link', { name: 'Home', exact: true }).click();
+            const quantityBlocking = page.locator('.ns-box').filter({ has: page.getByRole('heading', { name: 'Define Quantity' }) });
+
+            if (await quantityBlocking.isVisible().catch(() => false)) {
+                await quantityBlocking.getByText('Enter', { exact: true }).click().catch(async () => {
+                    await page.keyboard.press('Escape');
+                });
+                await expect(quantityBlocking).toBeHidden({ timeout: 15000 });
+            }
+
+            await page.locator('#grid-breadcrumb').getByRole('link', { name: 'Home', exact: true }).click({ force: true });
             await expect(grid.getByRole('heading').first()).toBeVisible();
         }
     }
@@ -59,6 +68,7 @@ export async function addProduct(page: Page, productName: string): Promise<void>
     }
 
     await quantityPopup.getByText('Enter', { exact: true }).click();
+    await expect(quantityPopup).toBeHidden({ timeout: 15000 });
     await expect(page.locator('#cart-products-table')).toContainText(productName);
 }
 
