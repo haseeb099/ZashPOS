@@ -4,6 +4,7 @@ namespace Modules\ZashDine\Tests\Feature;
 
 use App\Services\ModulesService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Cache;
 use Tests\TestCase;
 use Tests\Traits\WithAuthentication;
 
@@ -14,6 +15,8 @@ final class ZashDineModuleSmokeTest extends TestCase
     public function test_zash_dine_module_can_be_enabled_and_disabled(): void
     {
         $this->attemptAuthenticate();
+
+        Cache::forget( 'ns-core-installed' );
 
         /** @var ModulesService $modules */
         $modules = app()->make( ModulesService::class );

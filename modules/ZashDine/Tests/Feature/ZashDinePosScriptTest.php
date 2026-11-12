@@ -4,6 +4,7 @@ namespace Modules\ZashDine\Tests\Feature;
 
 use App\Services\ModulesService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Cache;
 use Tests\TestCase;
 
 final class ZashDinePosScriptTest extends TestCase
@@ -72,6 +73,8 @@ final class ZashDinePosScriptTest extends TestCase
 
     private function ensureZashDineViewsRegistered(): void
     {
+        Cache::forget( 'ns-core-installed' );
+
         /** @var ModulesService $modules */
         $modules = app()->make( ModulesService::class );
 

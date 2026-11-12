@@ -919,7 +919,7 @@ final class ZashDineKitchenTest extends TestCase
         $skuSwap[DineInTableService::TABLE_FIELD] = $table->id;
         $skuSwap['coupons'] = [];
         $skuSwap['payments'] = [];
-        $this->restockProduct( $productRouted );
+        // Restock only the foreign catalog product so stockBefore for the protected line stays stable.
         $this->restockProduct( $extraProduct );
         $skuSwap['products'] = collect( $baseProducts )
             ->map( function ( array $product ) use ( $extraProduct ) {
@@ -942,7 +942,6 @@ final class ZashDineKitchenTest extends TestCase
         );
         $assertPreserved();
 
-        $this->restockProduct( $productRouted );
         $this->restockProduct( $extraProduct );
         $mismatchedUnit = $orderData;
         $mismatchedUnit['type'] = ['identifier' => DineInTableService::ORDER_TYPE];
