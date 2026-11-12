@@ -1,6 +1,15 @@
 import { expect, test, type Page } from '@playwright/test';
 import { apiSend, createAreaAndTable, deleteAreaAndTable, listProducts } from '../helpers/api';
 import { authState } from '../helpers/auth';
+import { readFloorTable } from '../helpers/floor';
+import {
+    addProduct,
+    holdDineIn,
+    holdOpenOrder,
+    openHeldOrder,
+    openPos,
+    saveUnpaidDineIn,
+} from '../helpers/pos';
 import { baseURL } from '../load-env';
 
 async function listCategories(page: Page): Promise<Array<{ id: number; name: string }>> {
@@ -217,6 +226,92 @@ test.describe('ZashDine kitchen workflow', () => {
         } finally {
             await deleteKitchen(adminPage, kitchenA);
             await deleteKitchen(adminPage, kitchenB);
+            await deleteAreaAndTable(adminPage, created.areaId, created.tableId, orderId);
+            await chef.close();
+            await admin.close();
+        }
+    });
+
+    test('POS dine-in create and edit keep kitchen meal identity', async ({ browser }) => {
+        test.setTimeout(360000);
+        const admin = await browser.newContext({ storageState: authState('admin'), baseURL: baseURL() });
+        const chef = await browser.newContext({ storageState: authState('chef'), baseURL: baseURL() });
+        const adminPage = await admin.newPage();
+        const chefPage = await chef.newPage();
+        const created = await createAreaAndTable(adminPage, 'E2E kitchen POS');
+        const products = await listProducts(adminPage);
+
+        let kitchenA = 0;
+        let orderId: number | null = null;
+
+        try {
+            const detailed = [];
+            for (const product of products.slice(0, 20)) {
+                detailed.push(await productDetails(adminPage, product.id));
+            }
+
+            const productA = detailed.find((row) => row.category_id > 0 && row.unit_quantity_id > 0);
+            const productB = detailed.find((row) => (
+                row.id !== productA?.id
+                && row.category_id === productA?.category_id
+                && row.unit_quantity_id > 0
+            ));
+            expect(productA, 'need a product with a category').toBeTruthy();
+            expect(productB, 'need a second product in the same category').toBeTruthy();
+
+            await wipeKitchens(adminPage);
+            kitchenA = await createKitchen(adminPage, `POS Grill ${Date.now().toString(36)}`, [productA!.category_id]);
+            expect(kitchenA).toBeGreaterThan(0);
+
+            const reference = `kitchen-pos-${Date.now().toString(36)}`;
+            await openPos(adminPage);
+            await addProduct(adminPage, productA!.name);
+            await holdDineIn(adminPage, created.tableName, reference);
+
+            const floorBefore = await readFloorTable(adminPage, created.tableName);
+            orderId = floorBefore?.current_order_id ?? null;
+            expect(orderId).toBeTruthy();
+            const original = floorBefore?.items.find((item) => item.name === productA!.name);
+            expect(original?.id).toBeTruthy();
+            expect(original?.status).toBe('pending');
+
+            await chefPage.goto('/dashboard/zash-dine/kitchen');
+            await expect(chefPage.locator('[data-zash-dine-kitchen-screen]')).toBeVisible({ timeout: 30000 });
+            await chefPage.locator('#zash-dine-kitchen-filter').selectOption(String(kitchenA));
+            await expect.poll(async () => {
+                return chefPage.locator(`[data-zash-dine-ticket-kitchen="${kitchenA}"]`).count();
+            }, { timeout: 20000 }).toBeGreaterThan(0);
+            await expect(chefPage.locator(`[data-zash-dine-ticket-id="${original!.id}"]`)).toBeVisible();
+
+            await openPos(adminPage);
+            await openHeldOrder(adminPage, reference);
+            await expect(adminPage.locator('#cart-products-table')).toContainText(productA!.name);
+            await addProduct(adminPage, productB!.name);
+            await holdOpenOrder(adminPage, reference);
+
+            const floorAfter = await readFloorTable(adminPage, created.tableName);
+            const kept = floorAfter?.items.find((item) => item.id === original?.id);
+            const added = floorAfter?.items.find((item) => item.name === productB!.name);
+            expect(kept?.status).toBe('pending');
+            expect(kept?.name).toBe(productA!.name);
+            expect(added?.status).toBe('pending');
+            expect(floorAfter?.items.filter((item) => item.name === productA!.name && item.status !== 'cancelled')).toHaveLength(1);
+            expect(floorAfter?.items.filter((item) => item.name === productB!.name && item.status !== 'cancelled')).toHaveLength(1);
+
+            expect(added?.id).toBeTruthy();
+            await chefPage.locator('#zash-dine-kitchen-filter').selectOption(String(kitchenA));
+            await chefPage.getByRole('button', { name: 'Refresh now' }).click();
+            await expect.poll(async () => {
+                return chefPage.locator(`[data-zash-dine-ticket-id="${original!.id}"]`).count();
+            }, { timeout: 15000 }).toBe(1);
+            await expect.poll(async () => {
+                return chefPage.locator(`[data-zash-dine-ticket-id="${added!.id}"]`).count();
+            }, { timeout: 15000 }).toBe(1);
+            await expect(
+                chefPage.locator(`[data-zash-dine-ticket-id="${original!.id}"]`)
+            ).toHaveAttribute('data-zash-dine-ticket-status', 'pending');
+        } finally {
+            await deleteKitchen(adminPage, kitchenA);
             await deleteAreaAndTable(adminPage, created.areaId, created.tableId, orderId);
             await chef.close();
             await admin.close();

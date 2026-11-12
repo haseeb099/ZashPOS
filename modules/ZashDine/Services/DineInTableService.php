@@ -153,6 +153,72 @@ class DineInTableService
         ], true );
     }
 
+    /**
+     * Block waiter order edits that would remove, replace, or reduce meals that
+     * have already left pending kitchen status. Managers (zash.dine.manage) may proceed.
+     * Called from OrderAfterCheckPerformedEvent before OrdersService mutates products.
+     */
+    public function assertProtectedKitchenMealsPreserved( array $fields, ?Order $order = null ): void
+    {
+        if ( ! $order instanceof Order || $order->wasRecentlyCreated ) {
+            return;
+        }
+
+        $type = $fields['type']['identifier'] ?? $fields['type'] ?? $order->type ?? null;
+
+        if ( $type !== self::ORDER_TYPE ) {
+            return;
+        }
+
+        $order->loadMissing( 'products' );
+
+        $incoming = collect( $fields['products'] ?? [] )
+            ->filter( fn ( $product ) => is_array( $product ) && isset( $product['id'] ) )
+            ->keyBy( fn ( array $product ) => (int) $product['id'] );
+
+        $protectedItems = OrderItem::query()
+            ->where( 'order_id', $order->id )
+            ->whereIn( 'status', OrderItem::cancelRequiresManageStatuses() )
+            ->get();
+
+        foreach ( $protectedItems as $item ) {
+            $orderProductId = (int) ( $item->order_product_id ?? 0 );
+
+            if ( $orderProductId < 1 ) {
+                continue;
+            }
+
+            /** @var OrderProduct|null $existingProduct */
+            $existingProduct = $order->products->firstWhere( 'id', $orderProductId );
+
+            if ( ! $incoming->has( $orderProductId ) ) {
+                $this->assertCancelAllowedForKitchenStatus( $item );
+
+                continue;
+            }
+
+            $incomingProduct = $incoming->get( $orderProductId );
+
+            if (
+                $existingProduct instanceof OrderProduct
+                && isset( $incomingProduct['unit_id'] )
+                && (int) $incomingProduct['unit_id'] !== (int) $existingProduct->unit_id
+            ) {
+                $this->assertCancelAllowedForKitchenStatus( $item );
+
+                continue;
+            }
+
+            if (
+                $existingProduct instanceof OrderProduct
+                && array_key_exists( 'quantity', $incomingProduct )
+                && (float) $incomingProduct['quantity'] < (float) $existingProduct->quantity
+            ) {
+                $this->assertCancelAllowedForKitchenStatus( $item );
+            }
+        }
+    }
+
     public function syncOrderItems( Order $order, DiningTable $table ): void
     {
         $order->loadMissing( 'products' );
@@ -163,18 +229,25 @@ class DineInTableService
             ->map( fn ( $id ) => (int) $id )
             ->all();
 
-        $removedItemsQuery = OrderItem::query()
+        $removedItems = OrderItem::query()
             ->where( 'order_id', $order->id )
             ->whereNotNull( 'order_product_id' )
-            ->where( 'status', '!=', OrderItem::STATUS_CANCELLED );
+            ->where( 'status', '!=', OrderItem::STATUS_CANCELLED )
+            ->when(
+                $activeProductIds !== [],
+                fn ( $query ) => $query->whereNotIn( 'order_product_id', $activeProductIds )
+            )
+            ->get();
 
-        if ( $activeProductIds !== [] ) {
-            $removedItemsQuery->whereNotIn( 'order_product_id', $activeProductIds );
+        foreach ( $removedItems as $removedItem ) {
+            /**
+             * Defensive: order-update should already have been blocked for
+             * non-managers. Managers who intentionally removed the product may cancel.
+             */
+            $this->assertCancelAllowedForKitchenStatus( $removedItem );
+            $removedItem->status = OrderItem::STATUS_CANCELLED;
+            $removedItem->save();
         }
-
-        $removedItemsQuery->update( [
-            'status' => OrderItem::STATUS_CANCELLED,
-        ] );
 
         foreach ( $order->products as $product ) {
             $item = OrderItem::query()->firstOrNew( [
@@ -206,30 +279,59 @@ class DineInTableService
 
     public function cancelOrderItem( OrderItem $orderItem ): OrderItem
     {
-        $this->assertOrderItemIsActive( $orderItem );
+        /**
+         * Lock order → order item → order product. Same order as kitchen
+         * transitions that touch an order. Checks use the locked rows so a
+         * stale route-bound instance cannot bypass preparing/ready/rejected rules.
+         *
+         * SQLite does not provide production-grade concurrent lockForUpdate;
+         * this is correctness under sequential writers, not multi-writer proof.
+         */
+        return DB::transaction( function () use ( $orderItem ) {
+            $order = Order::query()
+                ->whereKey( $orderItem->order_id )
+                ->lockForUpdate()
+                ->first();
 
-        if ( $orderItem->isCancelled() ) {
-            throw new NotAllowedException(
-                __m( 'This meal is already cancelled.', 'ZashDine' )
-            );
-        }
+            if ( ! $order instanceof Order ) {
+                throw new NotAllowedException(
+                    __m( 'This order is no longer active on the floor.', 'ZashDine' )
+                );
+            }
 
-        $this->assertCancelAllowedForKitchenStatus( $orderItem );
+            $order->load( ['products', 'payments'] );
 
-        $order = Order::query()->with( ['products', 'payments'] )->find( $orderItem->order_id );
+            /** @var OrderItem|null $lockedItem */
+            $lockedItem = OrderItem::query()
+                ->whereKey( $orderItem->id )
+                ->lockForUpdate()
+                ->first();
 
-        if ( ! $order instanceof Order ) {
-            throw new NotAllowedException(
-                __m( 'This order is no longer active on the floor.', 'ZashDine' )
-            );
-        }
+            if ( ! $lockedItem instanceof OrderItem ) {
+                throw new NotAllowedException(
+                    __m( 'This meal could not be found.', 'ZashDine' )
+                );
+            }
 
-        $this->assertCancelAllowedForOrderPayments( $order );
+            $this->assertOrderItemIsActive( $lockedItem );
 
-        return DB::transaction( function () use ( $orderItem, $order ) {
-            $orderProduct = $orderItem->order_product_id
-                ? OrderProduct::query()->find( $orderItem->order_product_id )
-                : null;
+            if ( $lockedItem->isCancelled() ) {
+                throw new NotAllowedException(
+                    __m( 'This meal is already cancelled.', 'ZashDine' )
+                );
+            }
+
+            $this->assertCancelAllowedForKitchenStatus( $lockedItem );
+            $this->assertCancelAllowedForOrderPayments( $order );
+
+            $orderProduct = null;
+
+            if ( $lockedItem->order_product_id ) {
+                $orderProduct = OrderProduct::query()
+                    ->whereKey( $lockedItem->order_product_id )
+                    ->lockForUpdate()
+                    ->first();
+            }
 
             if ( $orderProduct instanceof OrderProduct ) {
                 /**
@@ -266,10 +368,10 @@ class DineInTableService
                 );
             }
 
-            $orderItem->status = OrderItem::STATUS_CANCELLED;
-            $orderItem->save();
+            $lockedItem->status = OrderItem::STATUS_CANCELLED;
+            $lockedItem->save();
 
-            return $orderItem->fresh();
+            return $lockedItem->fresh();
         } );
     }
 

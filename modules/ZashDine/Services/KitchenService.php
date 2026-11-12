@@ -3,9 +3,12 @@
 namespace Modules\ZashDine\Services;
 
 use App\Exceptions\NotAllowedException;
+use App\Models\Order;
 use App\Models\OrderProduct;
 use App\Models\Product;
+use App\Models\ProductCategory;
 use App\Models\User;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Modules\ZashDine\Models\Kitchen;
@@ -57,23 +60,38 @@ class KitchenService
     }
 
     /**
-     * Sync category assignments for a kitchen. A category may belong to only one kitchen.
+     * Validate category ids and exclusivity before a kitchen row is persisted.
      *
      * @param  list<int|string>  $categoryIds
      */
-    public function syncKitchenCategories( Kitchen $kitchen, array $categoryIds ): void
+    public function assertCategoryAssignmentAllowed( ?Kitchen $kitchen, array $categoryIds ): void
     {
         $this->pruneOrphanCategoryAssignments();
 
-        $normalized = collect( $categoryIds )
-            ->map( fn ( $id ) => (int) $id )
-            ->filter( fn ( int $id ) => $id > 0 )
-            ->unique()
-            ->values();
+        $normalized = $this->normalizeCategoryIds( $categoryIds );
+
+        if ( $normalized->isEmpty() ) {
+            return;
+        }
+
+        $existingCount = ProductCategory::query()
+            ->whereKey( $normalized->all() )
+            ->count();
+
+        if ( $existingCount !== $normalized->count() ) {
+            throw new NotAllowedException(
+                __m( 'One or more selected product categories are invalid.', 'ZashDine' )
+            );
+        }
+
+        $kitchenId = $kitchen?->id;
 
         $conflicts = KitchenCategory::query()
             ->whereIn( 'category_id', $normalized->all() )
-            ->where( 'kitchen_id', '!=', $kitchen->id )
+            ->when(
+                $kitchenId,
+                fn ( $query ) => $query->where( 'kitchen_id', '!=', $kitchenId )
+            )
             ->whereHas( 'kitchen' )
             ->pluck( 'category_id' );
 
@@ -82,12 +100,56 @@ class KitchenService
                 __m( 'One or more categories are already assigned to another kitchen.', 'ZashDine' )
             );
         }
+    }
 
-        $kitchen->categories()->sync(
-            $normalized->mapWithKeys( fn ( int $id ) => [
-                $id => ['author_id' => Auth::id()],
-            ] )->all()
-        );
+    /**
+     * Sync category assignments for a kitchen. A category may belong to only one kitchen.
+     * The unique index on category_id remains authoritative for races.
+     *
+     * @param  list<int|string>  $categoryIds
+     */
+    public function syncKitchenCategories( Kitchen $kitchen, array $categoryIds ): void
+    {
+        $this->assertCategoryAssignmentAllowed( $kitchen, $categoryIds );
+
+        $normalized = $this->normalizeCategoryIds( $categoryIds );
+
+        try {
+            $kitchen->categories()->sync(
+                $normalized->mapWithKeys( fn ( int $id ) => [
+                    $id => ['author_id' => Auth::id()],
+                ] )->all()
+            );
+        } catch ( QueryException $exception ) {
+            if ( $this->isUniqueCategoryConstraintFailure( $exception ) ) {
+                throw new NotAllowedException(
+                    __m( 'One or more categories are already assigned to another kitchen.', 'ZashDine' )
+                );
+            }
+
+            throw $exception;
+        }
+    }
+
+    /**
+     * @param  list<int|string>  $categoryIds
+     * @return \Illuminate\Support\Collection<int, int>
+     */
+    private function normalizeCategoryIds( array $categoryIds )
+    {
+        return collect( $categoryIds )
+            ->map( fn ( $id ) => (int) $id )
+            ->filter( fn ( int $id ) => $id > 0 )
+            ->unique()
+            ->values();
+    }
+
+    private function isUniqueCategoryConstraintFailure( QueryException $exception ): bool
+    {
+        $message = strtolower( $exception->getMessage() );
+
+        return str_contains( $message, 'zash_dine_kitchen_category_id_unique' )
+            || ( str_contains( $message, 'unique' ) && str_contains( $message, 'category_id' ) );
     }
 
     /**
@@ -181,7 +243,16 @@ class KitchenService
             );
         }
 
+        /**
+         * Lock order → order item (same order as Floor cancel). SQLite does not
+         * prove concurrent multi-writer safety; this is sequential correctness.
+         */
         return DB::transaction( function () use ( $orderItem, $toStatus ) {
+            Order::query()
+                ->whereKey( $orderItem->order_id )
+                ->lockForUpdate()
+                ->first();
+
             /** @var OrderItem|null $locked */
             $locked = OrderItem::query()
                 ->whereKey( $orderItem->id )

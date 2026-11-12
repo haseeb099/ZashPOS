@@ -78,8 +78,12 @@ final class ZashDineKitchenTest extends TestCase
         $grill = Kitchen::query()->where( 'name', 'like', 'Grill %' )->latest( 'id' )->firstOrFail();
         $this->assertTrue( $grill->categories()->whereKey( $categoryA->id )->exists() );
 
+        $kitchensBeforeConflict = Kitchen::query()->count();
+        $pivotsBeforeConflict = \Modules\ZashDine\Models\KitchenCategory::query()->count();
+        $barName = 'Bar ' . Str::random( 8 );
+
         $barResponse = $this->json( 'POST', 'api/crud/zashdine.kitchens', [
-            'name' => 'Bar ' . Str::random( 4 ),
+            'name' => $barName,
             'general' => [
                 'description' => 'Bar station',
                 'status' => Kitchen::STATUS_ENABLED,
@@ -88,12 +92,272 @@ final class ZashDineKitchenTest extends TestCase
         ] );
 
         $barResponse->assertStatus( 403 );
+        $this->assertSame( $kitchensBeforeConflict, Kitchen::query()->count() );
+        $this->assertSame( $pivotsBeforeConflict, \Modules\ZashDine\Models\KitchenCategory::query()->count() );
+        $this->assertFalse( Kitchen::query()->where( 'name', $barName )->exists() );
 
         $chef = $this->createUserWithZashDinePermissions( ['zash.dine.chef'] );
         $this->actingAs( $chef );
 
         $this->getDashboard( '/dashboard/zash-dine/kitchens' )->assertStatus( 403 );
         $this->getDashboard( '/dashboard/zash-dine/kitchen' )->assertOk();
+    }
+
+    public function test_kitchen_crud_conflict_and_invalid_categories_do_not_persist_partial_writes(): void
+    {
+        $categoryA = ProductCategory::query()->orderBy( 'id' )->firstOrFail();
+        $categoryB = ProductCategory::query()->orderBy( 'id' )->skip( 1 )->firstOrFail();
+
+        \Modules\ZashDine\Models\KitchenCategory::query()
+            ->whereIn( 'category_id', [$categoryA->id, $categoryB->id] )
+            ->delete();
+
+        $create = $this->json( 'POST', 'api/crud/zashdine.kitchens', [
+            'name' => 'Atomic Grill ' . Str::random( 4 ),
+            'general' => [
+                'description' => 'Original description',
+                'status' => Kitchen::STATUS_ENABLED,
+                'category_ids' => [$categoryA->id],
+            ],
+        ] )->assertOk();
+
+        $grillId = (int) data_get( $create->json(), 'data.entry.id' );
+        $grill = Kitchen::query()->findOrFail( $grillId );
+        $originalName = $grill->name;
+        $originalDescription = $grill->description;
+        $originalStatus = $grill->status;
+
+        $this->json( 'PUT', 'api/crud/zashdine.kitchens/' . $grillId, [
+            'name' => 'Hijacked Name',
+            'general' => [
+                'description' => 'Hijacked description',
+                'status' => Kitchen::STATUS_DISABLED,
+                'category_ids' => [999999001],
+            ],
+        ] )->assertStatus( 403 );
+
+        $grill->refresh();
+        $this->assertSame( $originalName, $grill->name );
+        $this->assertSame( $originalDescription, $grill->description );
+        $this->assertSame( $originalStatus, $grill->status );
+        $this->assertTrue( $grill->categories()->whereKey( $categoryA->id )->exists() );
+        $this->assertFalse(
+            \Modules\ZashDine\Models\KitchenCategory::query()
+                ->where( 'category_id', 999999001 )
+                ->exists()
+        );
+
+        $other = Kitchen::query()->create( [
+            'name' => 'Atomic Bar ' . Str::random( 4 ),
+            'status' => Kitchen::STATUS_ENABLED,
+            'description' => 'Owns B',
+            'author_id' => User::query()->value( 'id' ),
+        ] );
+        app( KitchenService::class )->syncKitchenCategories( $other, [$categoryB->id] );
+
+        $this->json( 'PUT', 'api/crud/zashdine.kitchens/' . $grillId, [
+            'name' => 'Still Hijacked',
+            'general' => [
+                'description' => 'Still hijacked',
+                'status' => Kitchen::STATUS_DISABLED,
+                'category_ids' => [$categoryB->id],
+            ],
+        ] )->assertStatus( 403 );
+
+        $grill->refresh();
+        $this->assertSame( $originalName, $grill->name );
+        $this->assertSame( $originalDescription, $grill->description );
+        $this->assertSame( $originalStatus, $grill->status );
+        $this->assertTrue( $grill->categories()->whereKey( $categoryA->id )->exists() );
+        $this->assertFalse( $grill->categories()->whereKey( $categoryB->id )->exists() );
+
+        $this->json( 'PUT', 'api/crud/zashdine.kitchens/' . $grillId, [
+            'name' => $originalName . ' Updated',
+            'general' => [
+                'description' => 'Updated cleanly',
+                'status' => Kitchen::STATUS_ENABLED,
+                'category_ids' => [$categoryA->id],
+            ],
+        ] )->assertOk();
+
+        $grill->refresh();
+        $this->assertSame( $originalName . ' Updated', $grill->name );
+        $this->assertSame( 'Updated cleanly', $grill->description );
+        $this->assertTrue( $grill->categories()->whereKey( $categoryA->id )->exists() );
+    }
+
+    public function test_waiter_order_edit_cannot_remove_or_reduce_protected_kitchen_meals(): void
+    {
+        [$table] = $this->createAvailableTable();
+        [$productRouted, $extraProduct] = $this->prepareRoutedAndUnassignedProducts();
+
+        $responses = $this->processOrders( [
+            'type' => ['identifier' => DineInTableService::ORDER_TYPE],
+            DineInTableService::TABLE_FIELD => $table->id,
+            'products' => [
+                array_merge( $this->productLine( $productRouted ), ['quantity' => 2] ),
+            ],
+            'coupons' => [],
+            'payments' => [],
+        ] );
+
+        $orderData = $responses[0]['order-creation']['data']['order'];
+        $orderId = $orderData['id'];
+        $item = OrderItem::query()->where( 'order_id', $orderId )->firstOrFail();
+        $orderProductId = $item->order_product_id;
+        $stockBefore = (float) $productRouted->unit_quantities->first()->fresh()->quantity;
+
+        $chef = $this->createUserWithZashDinePermissions( ['zash.dine.chef'] );
+        $this->actingAs( $chef );
+        $this->json( 'POST', 'api/zash-dine/order-items/' . $item->id . '/kitchen-status', [
+            'status' => OrderItem::STATUS_PREPARING,
+        ] )->assertOk();
+
+        $waiter = $this->createUserWithZashDinePermissions( [
+            'zash.dine.waiter',
+            'nexopos.create.orders',
+            'nexopos.update.orders',
+            'nexopos.read.orders',
+        ] );
+        $this->actingAs( $waiter );
+
+        $baseProducts = collect( $orderData['products'] )
+            ->map( function ( $product ) {
+                return [
+                    'id' => $product['id'],
+                    'product_id' => $product['product_id'],
+                    'name' => $product['name'],
+                    'quantity' => $product['quantity'],
+                    'unit_price' => $product['unit_price'],
+                    'unit_quantity_id' => $product['unit_quantity_id'],
+                    'unit_id' => $product['unit_id'],
+                    'discount' => $product['discount'] ?? 0,
+                    'discount_type' => $product['discount_type'] ?? 'percentage',
+                    'discount_percentage' => $product['discount_percentage'] ?? 0,
+                    'tax_type' => $product['tax_type'] ?? 'inclusive',
+                    'tax_group_id' => $product['tax_group_id'] ?? null,
+                ];
+            } )
+            ->values()
+            ->all();
+
+        $reducePayload = $orderData;
+        $reducePayload['type'] = ['identifier' => DineInTableService::ORDER_TYPE];
+        $reducePayload[DineInTableService::TABLE_FIELD] = $table->id;
+        $reducePayload['coupons'] = [];
+        $reducePayload['payments'] = [];
+        $reducePayload['products'] = collect( $baseProducts )
+            ->map( function ( array $product ) {
+                $product['quantity'] = 1;
+
+                return $product;
+            } )
+            ->all();
+
+        $this->json( 'PUT', 'api/orders/' . $orderId, $reducePayload )->assertStatus( 403 );
+
+        $removePayload = $reducePayload;
+        $removePayload['products'] = [$this->productLine( $extraProduct )];
+
+        $this->json( 'PUT', 'api/orders/' . $orderId, $removePayload )->assertStatus( 403 );
+
+        $item->refresh();
+        $this->assertSame( OrderItem::STATUS_PREPARING, $item->status );
+        $this->assertDatabaseHas( 'nexopos_orders_products', [
+            'id' => $orderProductId,
+            'quantity' => 2,
+        ] );
+        $this->assertSame(
+            $stockBefore,
+            (float) $productRouted->unit_quantities->first()->fresh()->quantity
+        );
+        $this->assertSame(
+            DiningTable::STATUS_OCCUPIED,
+            DiningTable::query()->findOrFail( $table->id )->status
+        );
+
+        $this->json( 'POST', 'api/zash-dine/order-items/' . $item->id . '/kitchen-status', [
+            'status' => OrderItem::STATUS_REJECTED,
+        ] )->assertStatus( 403 );
+
+        $this->actingAs( $chef );
+        $this->json( 'POST', 'api/zash-dine/order-items/' . $item->id . '/kitchen-status', [
+            'status' => OrderItem::STATUS_REJECTED,
+        ] )->assertOk();
+
+        $this->actingAs( $waiter );
+        $this->json( 'PUT', 'api/orders/' . $orderId, $removePayload )->assertStatus( 403 );
+
+        $item->refresh();
+        $this->assertSame( OrderItem::STATUS_REJECTED, $item->status );
+        $this->assertDatabaseHas( 'nexopos_orders_products', ['id' => $orderProductId] );
+
+        $this->attemptAuthenticate();
+        $keepAndAdd = $reducePayload;
+        $keepAndAdd['products'] = array_merge( $baseProducts, [$this->productLine( $extraProduct )] );
+        $this->json( 'PUT', 'api/orders/' . $orderId, $keepAndAdd )->assertOk();
+
+        $item->refresh();
+        $this->assertSame( OrderItem::STATUS_REJECTED, $item->status );
+        $this->assertSame( 1, OrderItem::query()
+            ->where( 'order_id', $orderId )
+            ->where( 'order_product_id', $orderProductId )
+            ->count() );
+        $this->assertTrue(
+            OrderItem::query()
+                ->where( 'order_id', $orderId )
+                ->where( 'status', OrderItem::STATUS_PENDING )
+                ->whereHas( 'orderProduct', fn ( $query ) => $query->where( 'product_id', $extraProduct->id ) )
+                ->exists()
+        );
+    }
+
+    public function test_stale_pending_instance_cannot_cancel_after_preparing_transition(): void
+    {
+        /**
+         * Deterministic stale-instance regression (sequential). Not a multi-writer
+         * concurrency proof under SQLite.
+         */
+        [$table] = $this->createAvailableTable();
+        [$productRouted] = $this->prepareRoutedAndUnassignedProducts();
+
+        $responses = $this->processOrders( [
+            'type' => ['identifier' => DineInTableService::ORDER_TYPE],
+            DineInTableService::TABLE_FIELD => $table->id,
+            'products' => [$this->productLine( $productRouted )],
+            'coupons' => [],
+            'payments' => [],
+        ] );
+
+        $orderId = $responses[0]['order-creation']['data']['order']['id'];
+        $stalePending = OrderItem::query()->where( 'order_id', $orderId )->firstOrFail();
+        $this->assertSame( OrderItem::STATUS_PENDING, $stalePending->status );
+        $orderProductId = $stalePending->order_product_id;
+        $stockBefore = (float) $productRouted->unit_quantities->first()->fresh()->quantity;
+
+        app( KitchenService::class )->transition( $stalePending, OrderItem::STATUS_PREPARING );
+
+        $waiter = $this->createUserWithZashDinePermissions( ['zash.dine.waiter'] );
+        $this->actingAs( $waiter );
+
+        try {
+            app( DineInTableService::class )->cancelOrderItem( $stalePending );
+            $this->fail( 'Expected stale pending cancel to be rejected after preparing.' );
+        } catch ( \App\Exceptions\NotAllowedException $exception ) {
+            $this->assertStringContainsString( 'manager', strtolower( $exception->getMessage() ) );
+        }
+
+        $fresh = OrderItem::query()->findOrFail( $stalePending->id );
+        $this->assertSame( OrderItem::STATUS_PREPARING, $fresh->status );
+        $this->assertDatabaseHas( 'nexopos_orders_products', ['id' => $orderProductId] );
+        $this->assertSame(
+            $stockBefore,
+            (float) $productRouted->unit_quantities->first()->fresh()->quantity
+        );
+        $this->assertSame(
+            DiningTable::STATUS_OCCUPIED,
+            DiningTable::query()->findOrFail( $table->id )->status
+        );
     }
 
     public function test_dine_in_meals_route_by_category_and_unassigned_stay_visible(): void

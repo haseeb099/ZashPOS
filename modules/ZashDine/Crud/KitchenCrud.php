@@ -42,6 +42,11 @@ class KitchenCrud extends CrudService
         'delete' => 'zash.dine.manage',
     ];
 
+    /**
+     * Persist kitchen + category pivot atomically so a conflict rolls back the kitchen row.
+     */
+    public bool $wrapSubmitInTransaction = true;
+
     public function getLabels()
     {
         return CrudTable::labels(
@@ -124,6 +129,22 @@ class KitchenCrud extends CrudService
         unset( $inputs['category_ids'] );
 
         return $inputs;
+    }
+
+    public function beforePost( $request, $entry = null, $inputs = [] )
+    {
+        app( KitchenService::class )->assertCategoryAssignmentAllowed(
+            null,
+            $this->categoryIdsFromRequest( $request )
+        );
+    }
+
+    public function beforePut( $request, Kitchen $entry, $inputs = [] )
+    {
+        app( KitchenService::class )->assertCategoryAssignmentAllowed(
+            $entry,
+            $this->categoryIdsFromRequest( $request )
+        );
     }
 
     public function afterPost( $request, Kitchen $entry )
@@ -268,6 +289,17 @@ class KitchenCrud extends CrudService
 
     private function syncCategoriesFromRequest( $request, Kitchen $entry ): void
     {
+        app( KitchenService::class )->syncKitchenCategories(
+            $entry,
+            $this->categoryIdsFromRequest( $request )
+        );
+    }
+
+    /**
+     * @return list<int|string>
+     */
+    private function categoryIdsFromRequest( $request ): array
+    {
         $categoryIds = [];
 
         if ( is_array( $request ) ) {
@@ -278,10 +310,6 @@ class KitchenCrud extends CrudService
             $categoryIds = $request->input( 'category_ids', $request->input( 'general.category_ids', [] ) );
         }
 
-        if ( ! is_array( $categoryIds ) ) {
-            $categoryIds = [];
-        }
-
-        app( KitchenService::class )->syncKitchenCategories( $entry, $categoryIds );
+        return is_array( $categoryIds ) ? $categoryIds : [];
     }
 }
