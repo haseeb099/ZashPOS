@@ -15,5 +15,6 @@ class OrderAfterCheckPerformedEventListener
     public function handle( OrderAfterCheckPerformedEvent $event ): void
     {
         $this->dineInTableService->assertDineInCanProceed( $event->fields, $event->order );
+        $this->dineInTableService->assertProtectedKitchenMealsPreserved( $event->fields, $event->order );
     }
 }

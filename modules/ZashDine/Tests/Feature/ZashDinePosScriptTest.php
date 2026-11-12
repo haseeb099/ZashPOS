@@ -4,6 +4,7 @@ namespace Modules\ZashDine\Tests\Feature;
 
 use App\Services\ModulesService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Cache;
 use Tests\TestCase;
 
 final class ZashDinePosScriptTest extends TestCase
@@ -59,8 +60,21 @@ final class ZashDinePosScriptTest extends TestCase
         $this->assertStringNotContainsString( 'window.confirm', $html );
     }
 
+    public function test_kitchen_script_registers_dashboard_component_with_status_helpers(): void
+    {
+        $html = view( 'ZashDine::kitchen-script' )->render();
+
+        $this->assertStringContainsString( "nsExtraComponents['zash-dine-kitchen']", $html );
+        $this->assertStringContainsString( 'data-zash-dine-kitchen-screen', $html );
+        $this->assertStringContainsString( 'statusLabel( status )', $html );
+        $this->assertStringContainsString( '/api/zash-dine/kitchen/tickets', $html );
+        $this->assertStringContainsString( 'setInterval', $html );
+    }
+
     private function ensureZashDineViewsRegistered(): void
     {
+        Cache::forget( 'ns-core-installed' );
+
         /** @var ModulesService $modules */
         $modules = app()->make( ModulesService::class );
 

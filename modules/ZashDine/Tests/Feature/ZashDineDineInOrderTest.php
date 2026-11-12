@@ -14,6 +14,7 @@ use App\Services\OrdersService;
 use App\Services\ProductService;
 use App\Services\UsersService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Str;
 use Mockery;
@@ -404,7 +405,8 @@ final class ZashDineDineInOrderTest extends TestCase
 
         $service = new DineInTableService(
             app( OrdersService::class ),
-            $productService
+            $productService,
+            app( \Modules\ZashDine\Services\KitchenService::class )
         );
 
         $thrown = null;
@@ -596,6 +598,8 @@ final class ZashDineDineInOrderTest extends TestCase
 
     private function ensureZashDineReady(): void
     {
+        Cache::forget( 'ns-core-installed' );
+
         /** @var ModulesService $modules */
         $modules = app()->make( ModulesService::class );
 

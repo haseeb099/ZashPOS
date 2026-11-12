@@ -306,6 +306,8 @@ final class ZashDineAreasTablesCrudTest extends TestCase
 
     private function ensureZashDineReady(): void
     {
+        Cache::forget( 'ns-core-installed' );
+
         /** @var ModulesService $modules */
         $modules = app()->make( ModulesService::class );
 

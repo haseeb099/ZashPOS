@@ -15,6 +15,14 @@ class RenderFooterEventListener
             return;
         }
 
+        if ( $event->routeName === 'zash-dine.kitchen'
+            || ( is_string( $event->routeName ) && str_ends_with( $event->routeName, 'zash-dine.kitchen' ) )
+        ) {
+            $event->output->addView( 'ZashDine::kitchen-script' );
+
+            return;
+        }
+
         if ( $event->routeName === ns()->routeName( 'ns.dashboard.pos' ) ) {
             $event->output->addView( 'ZashDine::popups-script' );
             $event->output->addView( 'ZashDine::pos-script' );

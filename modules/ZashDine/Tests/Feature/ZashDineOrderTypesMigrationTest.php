@@ -5,6 +5,7 @@ namespace Modules\ZashDine\Tests\Feature;
 use App\Classes\ModuleRouting;
 use App\Services\ModulesService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Route;
 use Tests\TestCase;
 use Tests\Traits\WithAuthentication;
@@ -61,6 +62,8 @@ final class ZashDineOrderTypesMigrationTest extends TestCase
 
     private function ensureZashDineReady(): void
     {
+        Cache::forget( 'ns-core-installed' );
+
         /** @var ModulesService $modules */
         $modules = app()->make( ModulesService::class );
 

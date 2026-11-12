@@ -103,6 +103,12 @@ class CrudService
      * aren't persistent while events
      * for this request are triggered.
      */
+    /**
+     * When true, entry save and afterPost/afterPut run inside DB::transaction
+     * so related writes (for example pivot sync) roll back with the main row.
+     */
+    public bool $wrapSubmitInTransaction = false;
+
     public $disablePost = false;
 
     /**
@@ -330,135 +336,143 @@ class CrudService
             $resource->beforePut( $unfiltredInputs, $entry, $inputs );
         }
 
-        /**
-         * If we would like to handle the PUT request
-         * by any other handler than the CrudService
-         */
-        if (
-            ( ! $isEditing && ! $resource->disablePost ) ||
-            ( $isEditing && ! $resource->disablePut )
-        ) {
-            $fillable = Hook::filter(
-                get_class( $resource ) . '@getFillable',
-                $resource->getFillable()
-            );
+        $persist = function () use ( $resource, $isEditing, $inputs, $unfiltredInputs, $entry, $id ) {
+            /**
+             * If we would like to handle the PUT request
+             * by any other handler than the CrudService
+             */
+            if (
+                ( ! $isEditing && ! $resource->disablePost ) ||
+                ( $isEditing && ! $resource->disablePut )
+            ) {
+                $fillable = Hook::filter(
+                    get_class( $resource ) . '@getFillable',
+                    $resource->getFillable()
+                );
 
-            foreach ( $inputs as $name => $value ) {
-                /**
-                 * If the field where explicitly added
-                 * on fields that must be ignored we should skip that.
-                 */
-                if ( ! in_array( $name, $resource->skippable ) ) {
+                foreach ( $inputs as $name => $value ) {
                     /**
-                     * If submitted field are part of fillable fields
+                     * If the field where explicitly added
+                     * on fields that must be ignored we should skip that.
                      */
-                    if ( in_array( $name, $fillable ) || count( $fillable ) === 0 ) {
-
+                    if ( ! in_array( $name, $resource->skippable ) ) {
                         /**
-                         * We might need to purify value
-                         * before storing it.
+                         * If submitted field are part of fillable fields
                          */
-                        $entry->$name = $value;
+                        if ( in_array( $name, $fillable ) || count( $fillable ) === 0 ) {
 
-                        /**
-                         * sanitizing input to remove
-                         * all script tags
-                         */
-                        if ( ! empty( $entry->$name ) ) {
-                            $entry->$name = strip_tags( $entry->$name );
+                            /**
+                             * We might need to purify value
+                             * before storing it.
+                             */
+                            $entry->$name = $value;
+
+                            /**
+                             * sanitizing input to remove
+                             * all script tags
+                             */
+                            if ( ! empty( $entry->$name ) ) {
+                                $entry->$name = strip_tags( $entry->$name );
+                            }
                         }
                     }
                 }
-            }
 
-            /**
-             * If fillable is empty or if "author_id" is explicitly
-             * mentionned on the fillable array.
-             */
-            if ( empty( $fillable ) || (
-                in_array( 'author_id', $fillable )
-            ) ) {
-                $entry->author_id = Auth::id();
-            }
+                /**
+                 * If fillable is empty or if "author_id" is explicitly
+                 * mentionned on the fillable array.
+                 */
+                if ( empty( $fillable ) || (
+                    in_array( 'author_id', $fillable )
+                ) ) {
+                    $entry->author_id = Auth::id();
+                }
 
-            /**
-             * if timestamp are provided we'll disable the timestamp feature.
-             * In case a field is not provided, the default value is used.
-             */
-            if ( ! empty( $entry->created_at ) || ! empty( $entry->updated_at ) ) {
-                $entry->timestamps = false;
-                $entry->created_at = $entry->created_at ?: ns()->date->toDateTimeString();
-                $entry->updated_at = $entry->updated_at ?: ns()->date->toDateTimeString();
-            }
+                /**
+                 * if timestamp are provided we'll disable the timestamp feature.
+                 * In case a field is not provided, the default value is used.
+                 */
+                if ( ! empty( $entry->created_at ) || ! empty( $entry->updated_at ) ) {
+                    $entry->timestamps = false;
+                    $entry->created_at = $entry->created_at ?: ns()->date->toDateTimeString();
+                    $entry->updated_at = $entry->updated_at ?: ns()->date->toDateTimeString();
+                }
 
-            $entry->save();
+                $entry->save();
 
-            /**
-             * loop the tabs relations
-             * and store it
-             */
-            foreach ( $resource->getTabsRelations() as $tab => $relationParams ) {
-                $fields = request()->input( $tab );
-                $class = $relationParams[0];
-                $localKey = $relationParams[1];
-                $foreignKey = $relationParams[2];
+                /**
+                 * loop the tabs relations
+                 * and store it
+                 */
+                foreach ( $resource->getTabsRelations() as $tab => $relationParams ) {
+                    $fields = request()->input( $tab );
+                    $class = $relationParams[0];
+                    $localKey = $relationParams[1];
+                    $foreignKey = $relationParams[2];
 
-                if ( ! empty( $fields ) ) {
-                    $model = $class::where( $localKey, $entry->$foreignKey )->first();
+                    if ( ! empty( $fields ) ) {
+                        $model = $class::where( $localKey, $entry->$foreignKey )->first();
 
-                    /**
-                     * no relation has been found
-                     * so we'll store that.
-                     */
-                    if ( ! $model instanceof $class ) {
-                        $model = new $relationParams[0]; // should be the class;
+                        /**
+                         * no relation has been found
+                         * so we'll store that.
+                         */
+                        if ( ! $model instanceof $class ) {
+                            $model = new $relationParams[0]; // should be the class;
+                        }
+
+                        /**
+                         * We're saving here all the fields for
+                         * the related model
+                         */
+                        foreach ( $fields as $name => $value ) {
+                            $model->$name = $value;
+                        }
+
+                        $model->$localKey = $entry->$foreignKey;
+                        $model->author_id = Auth::id();
+                        $model->save();
                     }
-
-                    /**
-                     * We're saving here all the fields for
-                     * the related model
-                     */
-                    foreach ( $fields as $name => $value ) {
-                        $model->$name = $value;
-                    }
-
-                    $model->$localKey = $entry->$foreignKey;
-                    $model->author_id = Auth::id();
-                    $model->save();
                 }
             }
-        }
 
-        /**
-         * Create an event after crud POST
-         */
-        if ( ! $isEditing ) {
-            if ( method_exists( $resource, 'afterPost' ) ) {
-                $resource->afterPost( $unfiltredInputs, $entry, $inputs );
+            /**
+             * Create an event after crud POST
+             */
+            if ( ! $isEditing ) {
+                if ( method_exists( $resource, 'afterPost' ) ) {
+                    $resource->afterPost( $unfiltredInputs, $entry, $inputs );
+                }
+
+                CrudAfterPostEvent::dispatch( $resource, $unfiltredInputs, $entry );
             }
 
-            CrudAfterPostEvent::dispatch( $resource, $unfiltredInputs, $entry );
-        }
+            /**
+             * Create an event after crud POST
+             */
+            if ( $isEditing ) {
+                if ( method_exists( $resource, 'afterPut' ) ) {
+                    $resource->afterPut( $unfiltredInputs, $entry, $inputs );
+                }
 
-        /**
-         * Create an event after crud POST
-         */
-        if ( $isEditing ) {
-            if ( method_exists( $resource, 'afterPut' ) ) {
-                $resource->afterPut( $unfiltredInputs, $entry, $inputs );
+                CrudAfterPutEvent::dispatch( $resource, $unfiltredInputs, $entry );
             }
 
-            CrudAfterPutEvent::dispatch( $resource, $unfiltredInputs, $entry );
+            return [
+                'status' => 'success',
+                'data' => [
+                    'entry' => $entry,
+                    'editUrl' => str_contains( $resource->getLinks()['edit'], '{id}' ) ? Str::replace( '{id}', $entry->id, $resource->getLinks()['edit'] ) : false,
+                ],
+                'message' => $id === null ? __( 'A new entry has been successfully created.' ) : __( 'The entry has been successfully updated.' ),
+            ];
+        };
+
+        if ( $resource->wrapSubmitInTransaction ) {
+            return DB::transaction( $persist );
         }
 
-        return [
-            'status' => 'success',
-            'data' => [
-                'entry' => $entry,
-                'editUrl' => str_contains( $resource->getLinks()['edit'], '{id}' ) ? Str::replace( '{id}', $entry->id, $resource->getLinks()['edit'] ) : false,
-            ],
-            'message' => $id === null ? __( 'A new entry has been successfully created.' ) : __( 'The entry has been successfully updated.' ),
-        ];
+        return $persist();
     }
 
     /**

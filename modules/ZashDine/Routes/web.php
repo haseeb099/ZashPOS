@@ -6,6 +6,8 @@ use Illuminate\Routing\Middleware\SubstituteBindings;
 use Illuminate\Support\Facades\Route;
 use Modules\ZashDine\Http\Controllers\AreasController;
 use Modules\ZashDine\Http\Controllers\FloorController;
+use Modules\ZashDine\Http\Controllers\KitchenScreenController;
+use Modules\ZashDine\Http\Controllers\KitchensController;
 use Modules\ZashDine\Http\Controllers\TablesController;
 
 Route::middleware( [
@@ -19,6 +21,10 @@ Route::middleware( [
     Route::get( 'tables', [TablesController::class, 'list'] )->name( 'zash-dine.tables.list' );
     Route::get( 'tables/create', [TablesController::class, 'create'] )->name( 'zash-dine.tables.create' );
     Route::get( 'tables/edit/{table}', [TablesController::class, 'edit'] )->name( 'zash-dine.tables.edit' );
+
+    Route::get( 'kitchens', [KitchensController::class, 'list'] )->name( 'zash-dine.kitchens.list' );
+    Route::get( 'kitchens/create', [KitchensController::class, 'create'] )->name( 'zash-dine.kitchens.create' );
+    Route::get( 'kitchens/edit/{kitchen}', [KitchensController::class, 'edit'] )->name( 'zash-dine.kitchens.edit' );
 } );
 
 Route::middleware( [
@@ -26,4 +32,11 @@ Route::middleware( [
     NsRestrictAnyMiddleware::class . ':zash.dine.waiter,zash.dine.manage',
 ] )->prefix( 'dashboard/zash-dine' )->group( function () {
     Route::get( 'floor', [FloorController::class, 'index'] )->name( 'zash-dine.floor' );
+} );
+
+Route::middleware( [
+    SubstituteBindings::class,
+    NsRestrictAnyMiddleware::class . ':zash.dine.chef,zash.dine.manage',
+] )->prefix( 'dashboard/zash-dine' )->group( function () {
+    Route::get( 'kitchen', [KitchenScreenController::class, 'index'] )->name( 'zash-dine.kitchen' );
 } );

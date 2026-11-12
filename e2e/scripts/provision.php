@@ -38,7 +38,14 @@ $create = function ( string $usernameEnv, string $passwordEnv, int $roleId ) use
         throw new RuntimeException( $usernameEnv . ' and ' . $passwordEnv . ' are required.' );
     }
 
-    if ( User::query()->where( 'username', $username )->exists() ) {
+    $existing = User::query()->where( 'username', $username )->first();
+
+    if ( $existing instanceof User ) {
+        $users->setUserRole( $existing, [$roleId] );
+        $existing->password = Hash::make( $password );
+        $existing->active = true;
+        $existing->save();
+
         return;
     }
 
@@ -51,8 +58,16 @@ $create = function ( string $usernameEnv, string $passwordEnv, int $roleId ) use
     ] );
 };
 
+$chefRole = Role::query()->firstOrNew( ['namespace' => 'zashdine.e2e.chef'] );
+$chefRole->name = 'ZashDine E2E Chef';
+$chefRole->description = 'POS access plus zash.dine.chef for Playwright kitchen screen.';
+$chefRole->save();
+$chefRole->addPermissions( $cashier->permissions->pluck( 'namespace' )->all() );
+$chefRole->addPermissions( 'zash.dine.chef' );
+
 $create( 'E2E_WAITER_USER', 'E2E_WAITER_PASSWORD', (int) $waiter->id );
 $create( 'E2E_CASHIER_USER', 'E2E_CASHIER_PASSWORD', (int) $cashier->id );
+$create( 'E2E_CHEF_USER', 'E2E_CHEF_PASSWORD', (int) $chefRole->id );
 
 $authorId = (int) User::query()->value( 'id' );
 $group = CustomerGroup::query()->first();
@@ -88,4 +103,4 @@ ns()->option->set( 'ns_customers_default_group', $group->id );
 ns()->option->set( 'ns_orders_allow_partial', 'yes' );
 ns()->option->set( 'ns_orders_allow_unpaid', 'yes' );
 
-echo 'E2E waiter and cashier users are ready.' . PHP_EOL;
+echo 'E2E waiter, cashier and chef users are ready.' . PHP_EOL;
