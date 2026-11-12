@@ -114,6 +114,8 @@ class DineInTableService
     public function syncOrderItemsFromOrder( Order $order ): void
     {
         if ( $order->type !== self::ORDER_TYPE ) {
+            $this->abandonDineInStateForOrder( $order );
+
             return;
         }
 
@@ -126,6 +128,36 @@ class DineInTableService
         }
 
         $this->syncOrderItems( $order, $table );
+    }
+
+    /**
+     * When an order leaves dine-in after a permitted type change, cancel remaining
+     * kitchen tickets and free the table so occupancy is not stranded.
+     */
+    public function abandonDineInStateForOrder( Order $order ): void
+    {
+        $hasKitchenRows = OrderItem::query()
+            ->where( 'order_id', $order->id )
+            ->exists();
+
+        $hasTable = DiningTable::query()
+            ->where( 'current_order_id', $order->id )
+            ->exists();
+
+        if ( ! $hasKitchenRows && ! $hasTable ) {
+            return;
+        }
+
+        OrderItem::query()
+            ->where( 'order_id', $order->id )
+            ->where( 'status', '!=', OrderItem::STATUS_CANCELLED )
+            ->get()
+            ->each( function ( OrderItem $item ) {
+                $item->status = OrderItem::STATUS_CANCELLED;
+                $item->save();
+            } );
+
+        $this->releaseTableForOrder( $order );
     }
 
     public function releaseTableForOrder( object|int $order ): void
@@ -154,9 +186,21 @@ class DineInTableService
     }
 
     /**
-     * Block waiter order edits that would remove, replace, or reduce meals that
-     * have already left pending kitchen status. Managers (zash.dine.manage) may proceed.
-     * Called from OrderAfterCheckPerformedEvent before OrdersService mutates products.
+     * Block waiter order edits that would remove, replace, reduce, or identity-swap
+     * meals that have already left pending kitchen status. Managers (zash.dine.manage)
+     * may proceed. Applicability is based on the persisted dine-in order and its kitchen
+     * rows — changing the incoming type to takeaway/delivery does not bypass protection.
+     * Leaving dine-in with protected meals requires manage; pending-only leave is allowed
+     * and cleaned up after update via abandonDineInStateForOrder().
+     *
+     * Acquires the same order → order_item lock order used by kitchen transitions and
+     * Floor cancel before reading products/statuses. Runs inside OrdersService::persistOrder's
+     * transaction so the lock is held through mutation and kitchen sync.
+     *
+     * SQLite does not provide production-grade concurrent lockForUpdate; this serialises
+     * sequential writers and keeps a consistent lock order, not multi-writer proof.
+     *
+     * @param  array<string, mixed>  $fields
      */
     public function assertProtectedKitchenMealsPreserved( array $fields, ?Order $order = null ): void
     {
@@ -164,32 +208,65 @@ class DineInTableService
             return;
         }
 
-        $type = $fields['type']['identifier'] ?? $fields['type'] ?? $order->type ?? null;
-
-        if ( $type !== self::ORDER_TYPE ) {
+        if ( ! $this->orderHasPersistedKitchenState( $order ) ) {
             return;
         }
 
-        $order->loadMissing( 'products' );
+        $lockedOrder = Order::query()
+            ->whereKey( $order->id )
+            ->lockForUpdate()
+            ->first();
+
+        if ( ! $lockedOrder instanceof Order ) {
+            return;
+        }
+
+        $lockedOrder->unsetRelation( 'products' );
+        $lockedOrder->load( [ 'products' ] );
+
+        OrderItem::query()
+            ->where( 'order_id', $lockedOrder->id )
+            ->lockForUpdate()
+            ->get();
+
+        if ( ns()->allowedTo( 'zash.dine.manage' ) ) {
+            return;
+        }
+
+        $incomingType = $this->resolveIncomingOrderType( $fields, $lockedOrder );
+        $protectedItems = OrderItem::query()
+            ->where( 'order_id', $lockedOrder->id )
+            ->whereIn( 'status', OrderItem::cancelRequiresManageStatuses() )
+            ->get()
+            ->keyBy( 'order_product_id' );
+
+        if ( $incomingType !== self::ORDER_TYPE ) {
+            if ( $protectedItems->isNotEmpty() ) {
+                throw new NotAllowedException(
+                    __m( 'This dine-in order has kitchen-protected meals and cannot change type without manager permission.', 'ZashDine' )
+                );
+            }
+
+            return;
+        }
+
+        if ( $protectedItems->isEmpty() ) {
+            return;
+        }
 
         $incoming = collect( $fields['products'] ?? [] )
             ->filter( fn ( $product ) => is_array( $product ) && isset( $product['id'] ) )
             ->keyBy( fn ( array $product ) => (int) $product['id'] );
 
-        $protectedItems = OrderItem::query()
-            ->where( 'order_id', $order->id )
-            ->whereIn( 'status', OrderItem::cancelRequiresManageStatuses() )
-            ->get();
-
-        foreach ( $protectedItems as $item ) {
-            $orderProductId = (int) ( $item->order_product_id ?? 0 );
+        foreach ( $protectedItems as $orderProductId => $item ) {
+            $orderProductId = (int) $orderProductId;
 
             if ( $orderProductId < 1 ) {
                 continue;
             }
 
             /** @var OrderProduct|null $existingProduct */
-            $existingProduct = $order->products->firstWhere( 'id', $orderProductId );
+            $existingProduct = $lockedOrder->products->firstWhere( 'id', $orderProductId );
 
             if ( ! $incoming->has( $orderProductId ) ) {
                 $this->assertCancelAllowedForKitchenStatus( $item );
@@ -201,8 +278,8 @@ class DineInTableService
 
             if (
                 $existingProduct instanceof OrderProduct
-                && isset( $incomingProduct['unit_id'] )
-                && (int) $incomingProduct['unit_id'] !== (int) $existingProduct->unit_id
+                && array_key_exists( 'quantity', $incomingProduct )
+                && (float) $incomingProduct['quantity'] < (float) $existingProduct->quantity
             ) {
                 $this->assertCancelAllowedForKitchenStatus( $item );
 
@@ -211,12 +288,93 @@ class DineInTableService
 
             if (
                 $existingProduct instanceof OrderProduct
-                && array_key_exists( 'quantity', $incomingProduct )
-                && (float) $incomingProduct['quantity'] < (float) $existingProduct->quantity
+                && $this->protectedMealIdentityChanged( $existingProduct, $incomingProduct )
             ) {
                 $this->assertCancelAllowedForKitchenStatus( $item );
             }
         }
+    }
+
+    /**
+     * Protection applies when the order is (or was) dine-in with kitchen/table state,
+     * regardless of the type in the incoming payload.
+     */
+    protected function orderHasPersistedKitchenState( Order $order ): bool
+    {
+        if ( $order->type === self::ORDER_TYPE ) {
+            return true;
+        }
+
+        return OrderItem::query()
+            ->where( 'order_id', $order->id )
+            ->exists()
+            || DiningTable::query()
+                ->where( 'current_order_id', $order->id )
+                ->exists();
+    }
+
+    /**
+     * @param  array<string, mixed>  $fields
+     */
+    protected function resolveIncomingOrderType( array $fields, Order $order ): string
+    {
+        $type = $fields['type']['identifier'] ?? $fields['type'] ?? $order->type;
+
+        return is_string( $type ) ? $type : (string) $order->type;
+    }
+
+    /**
+     * Detect product identity / unit swaps that would let __saveOrderProducts overwrite
+     * a protected line while keeping the same order_product id and quantity.
+     *
+     * @param  array<string, mixed>  $incoming
+     */
+    protected function protectedMealIdentityChanged( OrderProduct $existing, array $incoming ): bool
+    {
+        $existingProductId = (int) ( $existing->product_id ?? 0 );
+        $incomingHasProductId = array_key_exists( 'product_id', $incoming );
+        $incomingProductId = $incomingHasProductId ? (int) ( $incoming['product_id'] ?? 0 ) : null;
+        $incomingMode = (string) ( $incoming['mode'] ?? 'normal' );
+
+        if ( $incomingHasProductId && $incomingProductId !== $existingProductId ) {
+            return true;
+        }
+
+        // Catalog → custom: omitting or clearing product_id (and sku) makes core treat the line as custom.
+        if ( $existingProductId > 0 ) {
+            if ( $incomingMode === 'custom' ) {
+                return true;
+            }
+
+            if ( ! $incomingHasProductId && empty( $incoming['sku'] ?? null ) ) {
+                return true;
+            }
+
+            if ( $incomingHasProductId && $incomingProductId < 1 ) {
+                return true;
+            }
+        }
+
+        if ( isset( $incoming['unit_id'] ) && (int) $incoming['unit_id'] !== (int) $existing->unit_id ) {
+            return true;
+        }
+
+        if (
+            isset( $incoming['unit_quantity_id'] )
+            && (int) $incoming['unit_quantity_id'] !== (int) ( $existing->unit_quantity_id ?? 0 )
+        ) {
+            return true;
+        }
+
+        if (
+            $existingProductId < 1
+            && isset( $incoming['name'] )
+            && (string) $incoming['name'] !== (string) $existing->name
+        ) {
+            return true;
+        }
+
+        return false;
     }
 
     public function syncOrderItems( Order $order, DiningTable $table ): void

@@ -568,6 +568,334 @@ final class ZashDineKitchenTest extends TestCase
         $this->assertDatabaseMissing( 'nexopos_orders_products', ['id' => $orderProductId] );
     }
 
+    public function test_waiter_cannot_bypass_protected_meals_via_type_or_product_identity(): void
+    {
+        /**
+         * SQLite does not provide production-grade concurrent lockForUpdate;
+         * stale-state coverage here is sequential, not multi-writer proof.
+         */
+        [$table] = $this->createAvailableTable();
+        [$productRouted, $extraProduct] = $this->prepareRoutedAndUnassignedProducts();
+
+        $responses = $this->processOrders( [
+            'type' => ['identifier' => DineInTableService::ORDER_TYPE],
+            DineInTableService::TABLE_FIELD => $table->id,
+            'products' => [
+                array_merge( $this->productLine( $productRouted ), ['quantity' => 2] ),
+            ],
+            'coupons' => [],
+            'payments' => [],
+        ] );
+
+        $orderData = $responses[0]['order-creation']['data']['order'];
+        $orderId = $orderData['id'];
+        $item = OrderItem::query()->where( 'order_id', $orderId )->firstOrFail();
+        $orderProductId = $item->order_product_id;
+        $stockBefore = (float) $productRouted->unit_quantities->first()->fresh()->quantity;
+        $totalBefore = (float) ( $orderData['total'] ?? 0 );
+        $baseProducts = $this->orderProductsPayload( $orderData['products'] );
+
+        $chef = $this->createUserWithZashDinePermissions( ['zash.dine.chef'] );
+        $waiter = $this->createUserWithZashDinePermissions( [
+            'zash.dine.waiter',
+            'nexopos.create.orders',
+            'nexopos.update.orders',
+            'nexopos.read.orders',
+        ] );
+
+        $assertRejectedPreserved = function ( string $expectedStatus ) use (
+            $item,
+            $orderProductId,
+            $productRouted,
+            $stockBefore,
+            $table,
+            $orderId,
+            $totalBefore
+        ): void {
+            $item->refresh();
+            $this->assertSame( $expectedStatus, $item->status );
+            $this->assertDatabaseHas( 'nexopos_orders_products', [
+                'id' => $orderProductId,
+                'product_id' => $productRouted->id,
+                'quantity' => 2,
+            ] );
+            $this->assertSame(
+                $stockBefore,
+                (float) $productRouted->unit_quantities->first()->fresh()->quantity
+            );
+            $occupied = DiningTable::query()->findOrFail( $table->id );
+            $this->assertSame( DiningTable::STATUS_OCCUPIED, $occupied->status );
+            $this->assertSame( (int) $orderId, (int) $occupied->current_order_id );
+            $this->assertEqualsWithDelta(
+                $totalBefore,
+                (float) \App\Models\Order::query()->findOrFail( $orderId )->total,
+                0.01
+            );
+        };
+
+        $assertWaiterBypassRejected = function ( string $expectedStatus ) use (
+            $waiter,
+            $orderData,
+            $orderId,
+            $table,
+            $baseProducts,
+            $extraProduct,
+            $assertRejectedPreserved
+        ): void {
+            $this->actingAs( $waiter );
+
+            $typeBypass = $orderData;
+            $typeBypass['type'] = ['identifier' => 'takeaway'];
+            $typeBypass['coupons'] = [];
+            $typeBypass['payments'] = [];
+            $typeBypass['products'] = $baseProducts;
+            $this->json( 'PUT', 'api/orders/' . $orderId, $typeBypass )->assertStatus( 403 );
+            $assertRejectedPreserved( $expectedStatus );
+
+            $swapProduct = $orderData;
+            $swapProduct['type'] = ['identifier' => DineInTableService::ORDER_TYPE];
+            $swapProduct[DineInTableService::TABLE_FIELD] = $table->id;
+            $swapProduct['coupons'] = [];
+            $swapProduct['payments'] = [];
+            $swapProduct['products'] = collect( $baseProducts )
+                ->map( function ( array $product ) use ( $extraProduct ) {
+                    $product['product_id'] = $extraProduct->id;
+                    $product['name'] = $extraProduct->name;
+
+                    return $product;
+                } )
+                ->all();
+            $this->json( 'PUT', 'api/orders/' . $orderId, $swapProduct )->assertStatus( 403 );
+            $assertRejectedPreserved( $expectedStatus );
+
+            $toCustom = $orderData;
+            $toCustom['type'] = ['identifier' => DineInTableService::ORDER_TYPE];
+            $toCustom[DineInTableService::TABLE_FIELD] = $table->id;
+            $toCustom['coupons'] = [];
+            $toCustom['payments'] = [];
+            $toCustom['products'] = collect( $baseProducts )
+                ->map( function ( array $product ) {
+                    unset( $product['product_id'] );
+                    $product['mode'] = 'custom';
+                    $product['name'] = 'Custom Replacement';
+
+                    return $product;
+                } )
+                ->all();
+            $this->json( 'PUT', 'api/orders/' . $orderId, $toCustom )->assertStatus( 403 );
+            $assertRejectedPreserved( $expectedStatus );
+        };
+
+        $this->actingAs( $chef );
+        $this->json( 'POST', 'api/zash-dine/order-items/' . $item->id . '/kitchen-status', [
+            'status' => OrderItem::STATUS_PREPARING,
+        ] )->assertOk();
+        $assertWaiterBypassRejected( OrderItem::STATUS_PREPARING );
+
+        $this->actingAs( $chef );
+        $this->json( 'POST', 'api/zash-dine/order-items/' . $item->id . '/kitchen-status', [
+            'status' => OrderItem::STATUS_READY,
+        ] )->assertOk();
+        $assertWaiterBypassRejected( OrderItem::STATUS_READY );
+
+        $this->attemptAuthenticate();
+        [$tableRejected] = $this->createAvailableTable();
+        $rejectedResponses = $this->processOrders( [
+            'type' => ['identifier' => DineInTableService::ORDER_TYPE],
+            DineInTableService::TABLE_FIELD => $tableRejected->id,
+            'products' => [array_merge( $this->productLine( $productRouted ), ['quantity' => 1] )],
+            'coupons' => [],
+            'payments' => [],
+        ] );
+        $rejectedOrder = $rejectedResponses[0]['order-creation']['data']['order'];
+        $rejectedItem = OrderItem::query()->where( 'order_id', $rejectedOrder['id'] )->firstOrFail();
+        $rejectedStock = (float) $productRouted->unit_quantities->first()->fresh()->quantity;
+        $rejectedTotal = (float) ( $rejectedOrder['total'] ?? 0 );
+
+        $this->actingAs( $chef );
+        $this->json( 'POST', 'api/zash-dine/order-items/' . $rejectedItem->id . '/kitchen-status', [
+            'status' => OrderItem::STATUS_REJECTED,
+        ] )->assertOk();
+
+        $this->actingAs( $waiter );
+        $rejectedType = $rejectedOrder;
+        $rejectedType['type'] = ['identifier' => 'takeaway'];
+        $rejectedType['coupons'] = [];
+        $rejectedType['payments'] = [];
+        $rejectedType['products'] = $this->orderProductsPayload( $rejectedOrder['products'] );
+        $this->json( 'PUT', 'api/orders/' . $rejectedOrder['id'], $rejectedType )->assertStatus( 403 );
+
+        $rejectedSwap = $rejectedOrder;
+        $rejectedSwap['type'] = ['identifier' => DineInTableService::ORDER_TYPE];
+        $rejectedSwap[DineInTableService::TABLE_FIELD] = $tableRejected->id;
+        $rejectedSwap['coupons'] = [];
+        $rejectedSwap['payments'] = [];
+        $rejectedSwap['products'] = collect( $this->orderProductsPayload( $rejectedOrder['products'] ) )
+            ->map( function ( array $product ) use ( $extraProduct ) {
+                $product['product_id'] = $extraProduct->id;
+                $product['name'] = $extraProduct->name;
+
+                return $product;
+            } )
+            ->all();
+        $this->json( 'PUT', 'api/orders/' . $rejectedOrder['id'], $rejectedSwap )->assertStatus( 403 );
+
+        $rejectedItem->refresh();
+        $this->assertSame( OrderItem::STATUS_REJECTED, $rejectedItem->status );
+        $this->assertDatabaseHas( 'nexopos_orders_products', [
+            'id' => $rejectedItem->order_product_id,
+            'product_id' => $productRouted->id,
+            'quantity' => 1,
+        ] );
+        $this->assertSame(
+            $rejectedStock,
+            (float) $productRouted->unit_quantities->first()->fresh()->quantity
+        );
+        $this->assertSame(
+            DiningTable::STATUS_OCCUPIED,
+            DiningTable::query()->findOrFail( $tableRejected->id )->status
+        );
+        $this->assertEqualsWithDelta(
+            $rejectedTotal,
+            (float) \App\Models\Order::query()->findOrFail( $rejectedOrder['id'] )->total,
+            0.01
+        );
+
+        // Stale edit payload after kitchen transition (sequential).
+        $this->attemptAuthenticate();
+        [$tableStale] = $this->createAvailableTable();
+        $staleResponses = $this->processOrders( [
+            'type' => ['identifier' => DineInTableService::ORDER_TYPE],
+            DineInTableService::TABLE_FIELD => $tableStale->id,
+            'products' => [$this->productLine( $productRouted )],
+            'coupons' => [],
+            'payments' => [],
+        ] );
+        $staleOrder = $staleResponses[0]['order-creation']['data']['order'];
+        $staleItem = OrderItem::query()->where( 'order_id', $staleOrder['id'] )->firstOrFail();
+        $staleRemove = $staleOrder;
+        $staleRemove['type'] = ['identifier' => DineInTableService::ORDER_TYPE];
+        $staleRemove[DineInTableService::TABLE_FIELD] = $tableStale->id;
+        $staleRemove['coupons'] = [];
+        $staleRemove['payments'] = [];
+        $staleRemove['products'] = [$this->productLine( $extraProduct )];
+
+        app( KitchenService::class )->transition( $staleItem, OrderItem::STATUS_PREPARING );
+
+        $this->actingAs( $waiter );
+        $this->json( 'PUT', 'api/orders/' . $staleOrder['id'], $staleRemove )->assertStatus( 403 );
+        $staleItem->refresh();
+        $this->assertSame( OrderItem::STATUS_PREPARING, $staleItem->status );
+        $this->assertDatabaseHas( 'nexopos_orders_products', [
+            'id' => $staleItem->order_product_id,
+            'product_id' => $productRouted->id,
+        ] );
+
+        // Pending meal: type change allowed; kitchen abandoned and table freed.
+        $this->attemptAuthenticate();
+        [$tablePending] = $this->createAvailableTable();
+        $pendingResponses = $this->processOrders( [
+            'type' => ['identifier' => DineInTableService::ORDER_TYPE],
+            DineInTableService::TABLE_FIELD => $tablePending->id,
+            'products' => [$this->productLine( $productRouted )],
+            'coupons' => [],
+            'payments' => [],
+        ] );
+        $pendingOrder = $pendingResponses[0]['order-creation']['data']['order'];
+        $pendingItem = OrderItem::query()->where( 'order_id', $pendingOrder['id'] )->firstOrFail();
+        $this->assertSame( OrderItem::STATUS_PENDING, $pendingItem->status );
+
+        $this->actingAs( $waiter );
+        $leavePending = $pendingOrder;
+        $leavePending['type'] = ['identifier' => 'takeaway'];
+        $leavePending['coupons'] = [];
+        $leavePending['payments'] = [];
+        $leavePending['products'] = $this->orderProductsPayload( $pendingOrder['products'] );
+        $this->json( 'PUT', 'api/orders/' . $pendingOrder['id'], $leavePending )->assertOk();
+
+        $pendingItem->refresh();
+        $this->assertSame( OrderItem::STATUS_CANCELLED, $pendingItem->status );
+        $freed = DiningTable::query()->findOrFail( $tablePending->id );
+        $this->assertSame( DiningTable::STATUS_AVAILABLE, $freed->status );
+        $this->assertNull( $freed->current_order_id );
+        $this->assertSame( 'takeaway', \App\Models\Order::query()->findOrFail( $pendingOrder['id'] )->type );
+
+        // Pending product identity change still allowed for waiters.
+        $this->attemptAuthenticate();
+        [$tablePendingEdit] = $this->createAvailableTable();
+        $pendingEditResponses = $this->processOrders( [
+            'type' => ['identifier' => DineInTableService::ORDER_TYPE],
+            DineInTableService::TABLE_FIELD => $tablePendingEdit->id,
+            'products' => [$this->productLine( $productRouted )],
+            'coupons' => [],
+            'payments' => [],
+        ] );
+        $pendingEditOrder = $pendingEditResponses[0]['order-creation']['data']['order'];
+        $pendingEditItem = OrderItem::query()->where( 'order_id', $pendingEditOrder['id'] )->firstOrFail();
+        $pendingEditPayload = $pendingEditOrder;
+        $pendingEditPayload['type'] = ['identifier' => DineInTableService::ORDER_TYPE];
+        $pendingEditPayload[DineInTableService::TABLE_FIELD] = $tablePendingEdit->id;
+        $pendingEditPayload['coupons'] = [];
+        $pendingEditPayload['payments'] = [];
+        $pendingEditPayload['products'] = [
+            array_merge( $this->productLine( $extraProduct ), [
+                'id' => $pendingEditOrder['products'][0]['id'],
+            ] ),
+        ];
+        $this->actingAs( $waiter );
+        $this->json( 'PUT', 'api/orders/' . $pendingEditOrder['id'], $pendingEditPayload )->assertOk();
+        $this->assertDatabaseHas( 'nexopos_orders_products', [
+            'id' => $pendingEditItem->order_product_id,
+            'product_id' => $extraProduct->id,
+        ] );
+
+        // Manager may change type despite protected meals; abandon cleans kitchen/table.
+        $this->attemptAuthenticate();
+        $managerLeave = $orderData;
+        $managerLeave['type'] = ['identifier' => 'takeaway'];
+        $managerLeave['coupons'] = [];
+        $managerLeave['payments'] = [];
+        $managerLeave['products'] = $baseProducts;
+        $this->json( 'PUT', 'api/orders/' . $orderId, $managerLeave )->assertOk();
+        $item->refresh();
+        $this->assertSame( OrderItem::STATUS_CANCELLED, $item->status );
+        $this->assertSame(
+            DiningTable::STATUS_AVAILABLE,
+            DiningTable::query()->findOrFail( $table->id )->status
+        );
+        $this->assertDatabaseHas( 'nexopos_orders_products', [
+            'id' => $orderProductId,
+            'product_id' => $productRouted->id,
+        ] );
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $products
+     * @return array<int, array<string, mixed>>
+     */
+    private function orderProductsPayload( array $products ): array
+    {
+        return collect( $products )
+            ->map( function ( $product ) {
+                return [
+                    'id' => $product['id'],
+                    'product_id' => $product['product_id'],
+                    'name' => $product['name'],
+                    'quantity' => $product['quantity'],
+                    'unit_price' => $product['unit_price'],
+                    'unit_quantity_id' => $product['unit_quantity_id'],
+                    'unit_id' => $product['unit_id'],
+                    'discount' => $product['discount'] ?? 0,
+                    'discount_type' => $product['discount_type'] ?? 'percentage',
+                    'discount_percentage' => $product['discount_percentage'] ?? 0,
+                    'tax_type' => $product['tax_type'] ?? 'inclusive',
+                    'tax_group_id' => $product['tax_group_id'] ?? null,
+                ];
+            } )
+            ->values()
+            ->all();
+    }
+
     /**
      * @return array{0: DiningTable, 1: Area}
      */
