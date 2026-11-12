@@ -42,6 +42,10 @@ final class ZashDinePosScriptTest extends TestCase
         $this->assertStringContainsString( 'zash-dine-table-picker', $html );
         $this->assertStringContainsString( 'zash-dine-note-popup', $html );
         $this->assertStringContainsString( 'zash-dine-cancel-meal-popup', $html );
+        $this->assertStringContainsString( 'data-zash-dine-notice="race"', $html );
+        $this->assertStringContainsString( 'clearNotice', $html );
+        $this->assertStringContainsString( 'calc(100vw - 2rem)', $html );
+        $this->assertStringContainsString( 'calc(100vh - 2rem)', $html );
     }
 
     public function test_floor_script_uses_vue_popups_instead_of_native_dialogs(): void

@@ -1,8 +1,18 @@
+<style>
+    #zash-dine-table-picker,
+    #zash-dine-note-popup,
+    #zash-dine-cancel-meal-popup {
+        width: min(36rem, calc(100vw - 2rem));
+        max-height: min(80vh, calc(100vh - 2rem));
+    }
+</style>
 <script>
 (() => {
     if ( typeof window === 'undefined' ) {
         return;
     }
+
+    const popupShellClass = 'shadow-lg overflow-hidden flex flex-col ns-box';
 
     const bindEscape = ( component ) => {
         if ( typeof nsHotPress === 'undefined' || ! component.popup ) {
@@ -47,6 +57,7 @@
             return {
                 loading: true,
                 error: null,
+                notice: null,
                 areas: [],
                 selectedId: null,
                 confirming: false,
@@ -57,6 +68,9 @@
         computed: {
             hasTables() {
                 return this.areas.some( ( area ) => ( area.tables || [] ).length > 0 );
+            },
+            canConfirm() {
+                return Boolean( this.selectedId ) && ! this.confirming && ! this.loading;
             },
         },
         mounted() {
@@ -71,9 +85,20 @@
             restoreFocus( this.previousFocus );
         },
         methods: {
-            loadTables() {
+            loadTables( options = {} ) {
+                const clearNotice = options.clearNotice !== false;
+                const preserveSelected = options.preserveSelected === true;
+
                 this.loading = true;
                 this.error = null;
+
+                if ( clearNotice ) {
+                    this.notice = null;
+                }
+
+                if ( ! preserveSelected ) {
+                    this.selectedId = null;
+                }
 
                 nsHttpClient.get( '/api/zash-dine/tables/available' ).subscribe({
                     next: ( response ) => {
@@ -94,10 +119,16 @@
                         } );
 
                         this.areas = Object.values( groups );
+
+                        if ( this.selectedId && ! tables.some( ( table ) => Number( table.id ) === Number( this.selectedId ) ) ) {
+                            this.selectedId = null;
+                        }
+
                         this.loading = false;
 
                         this.$nextTick( () => {
                             const preferred = this.$el.querySelector( '[data-zash-dine-focus="table"]' )
+                                || this.$el.querySelector( '[data-zash-dine-focus="retry"]' )
                                 || this.$el.querySelector( 'button, [href], input, select, textarea' );
                             preferred?.focus();
                         } );
@@ -105,6 +136,8 @@
                     error: ( error ) => {
                         this.error = error?.message || this.labels.unable;
                         this.loading = false;
+                        this.areas = [];
+                        this.selectedId = null;
                         this.$nextTick( () => {
                             this.$el.querySelector( '[data-zash-dine-focus="retry"]' )?.focus();
                         } );
@@ -113,6 +146,8 @@
             },
             selectTable( table ) {
                 this.selectedId = table.id;
+                this.notice = null;
+                this.error = null;
             },
             cancel() {
                 if ( this.confirming ) {
@@ -126,7 +161,7 @@
                 this.popup.close();
             },
             confirm() {
-                if ( this.confirming || ! this.selectedId ) {
+                if ( ! this.canConfirm ) {
                     return;
                 }
 
@@ -140,8 +175,9 @@
 
                         if ( ! selected ) {
                             this.confirming = false;
-                            this.error = this.labels.occupiedRace || this.labels.noTables;
-                            this.loadTables();
+                            this.selectedId = null;
+                            this.notice = this.labels.occupiedRace || this.labels.noTables;
+                            this.loadTables( { clearNotice: false, preserveSelected: false } );
                             return;
                         }
 
@@ -162,25 +198,26 @@
             },
         },
         template: `
-            <div id="zash-dine-table-picker" class="shadow-lg w-[85.71vw] md:w-[57.14vw] lg:w-[42.86vw] max-h-[80vh] overflow-hidden flex flex-col ns-box" role="dialog" aria-modal="true" :aria-label="labels.selectTable">
-                <div class="p-2 border-b ns-box-header text-fontcolor flex justify-between items-center">
-                    <h3 class="font-semibold">@{{ labels.selectTable }}</h3>
-                    <button type="button" class="outline-hidden ns-close-button hover:border-transparent border rounded-full h-6 min-w-[1.5rem] flex items-center justify-center" @click="cancel" :aria-label="labels.cancel">
+            <div id="zash-dine-table-picker" class="${popupShellClass}" role="dialog" aria-modal="true" :aria-label="labels.selectTable">
+                <div class="p-2 border-b ns-box-header text-fontcolor flex justify-between items-center shrink-0 gap-2">
+                    <h3 class="font-semibold break-words">@{{ labels.selectTable }}</h3>
+                    <button type="button" class="outline-hidden ns-close-button hover:border-transparent border rounded-full h-6 min-w-[1.5rem] flex items-center justify-center shrink-0" @click="cancel" :aria-label="labels.close || labels.cancel">
                         <i class="las la-times text-xs"></i>
                     </button>
                 </div>
-                <div class="flex-auto overflow-y-auto ns-box-body p-3 space-y-3">
+                <div class="flex-auto min-h-0 overflow-y-auto ns-box-body p-3 space-y-3">
+                    <p v-if="notice" class="text-sm text-error-primary break-words" role="alert" data-zash-dine-notice="race">@{{ notice }}</p>
                     <p v-if="loading" class="text-sm text-fontcolor-soft">@{{ labels.loading }}</p>
-                    <div v-else-if="error" class="space-y-2">
-                        <p class="text-sm text-error-primary" role="alert">@{{ error }}</p>
-                        <button type="button" data-zash-dine-focus="retry" class="rounded px-3 py-1 text-sm bg-info-tertiary text-info-primary" @click="loadTables">@{{ labels.retry }}</button>
+                    <div v-if="error" class="space-y-2">
+                        <p class="text-sm text-error-primary break-words" role="alert">@{{ error }}</p>
+                        <button type="button" data-zash-dine-focus="retry" class="rounded px-3 py-1 text-sm bg-info-tertiary text-info-primary" @click="loadTables()">@{{ labels.retry }}</button>
                     </div>
-                    <div v-else-if="!hasTables" class="space-y-2">
-                        <p class="text-sm text-fontcolor-soft" role="status">@{{ labels.noTables }}</p>
-                        <button type="button" data-zash-dine-focus="retry" class="rounded px-3 py-1 text-sm bg-info-tertiary text-info-primary" @click="loadTables">@{{ labels.retry }}</button>
+                    <div v-else-if="!loading && !hasTables" class="space-y-2">
+                        <p class="text-sm text-fontcolor-soft break-words" role="status">@{{ labels.noTables }}</p>
+                        <button type="button" data-zash-dine-focus="retry" class="rounded px-3 py-1 text-sm bg-info-tertiary text-info-primary" @click="loadTables()">@{{ labels.retry }}</button>
                     </div>
-                    <section v-else v-for="area in areas" :key="area.id" class="space-y-2">
-                        <h4 class="text-sm font-semibold text-fontcolor">@{{ area.name }}</h4>
+                    <section v-if="hasTables" v-for="area in areas" :key="area.id" class="space-y-2">
+                        <h4 class="text-sm font-semibold text-fontcolor break-words">@{{ area.name }}</h4>
                         <ul class="space-y-2">
                             <li v-for="table in area.tables" :key="table.id">
                                 <button
@@ -190,19 +227,19 @@
                                     :class="Number(selectedId) === Number(table.id) ? 'bg-info-tertiary text-info-primary border-info-primary' : 'bg-box-background text-fontcolor'"
                                     @click="selectTable(table)"
                                 >
-                                    <span class="font-medium">@{{ table.name }}</span>
+                                    <span class="font-medium break-words">@{{ table.name }}</span>
                                     <span class="block text-xs text-fontcolor-soft">@{{ table.seats }} @{{ labels.seats }}</span>
                                 </button>
                             </li>
                         </ul>
                     </section>
                 </div>
-                <div class="p-2 border-t ns-box-footer flex justify-end gap-2">
+                <div class="p-2 border-t ns-box-footer flex justify-end gap-2 shrink-0 flex-wrap">
                     <button type="button" class="rounded px-3 py-2 text-sm" @click="cancel">@{{ labels.cancel }}</button>
                     <button
                         type="button"
                         class="rounded px-3 py-2 text-sm bg-info-tertiary text-info-primary disabled:opacity-50"
-                        :disabled="!selectedId || confirming || loading"
+                        :disabled="!canConfirm"
                         @click="confirm"
                     >@{{ confirming ? labels.confirming : labels.confirm }}</button>
                 </div>
@@ -275,15 +312,15 @@
             },
         },
         template: `
-            <div id="zash-dine-note-popup" class="shadow-lg w-[85.71vw] md:w-[42.86vw] overflow-hidden flex flex-col ns-box" role="dialog" aria-modal="true" :aria-label="labels.noteTitle">
-                <div class="p-2 border-b ns-box-header text-fontcolor flex justify-between items-center">
-                    <h3 class="font-semibold">@{{ labels.noteTitle }}</h3>
-                    <button type="button" class="outline-hidden ns-close-button hover:border-transparent border rounded-full h-6 min-w-[1.5rem] flex items-center justify-center" @click="cancel" :aria-label="labels.cancel">
+            <div id="zash-dine-note-popup" class="${popupShellClass}" role="dialog" aria-modal="true" :aria-label="labels.noteTitle">
+                <div class="p-2 border-b ns-box-header text-fontcolor flex justify-between items-center shrink-0 gap-2">
+                    <h3 class="font-semibold break-words">@{{ labels.noteTitle }}</h3>
+                    <button type="button" class="outline-hidden ns-close-button hover:border-transparent border rounded-full h-6 min-w-[1.5rem] flex items-center justify-center shrink-0" @click="cancel" :aria-label="labels.close || labels.cancel">
                         <i class="las la-times text-xs"></i>
                     </button>
                 </div>
-                <div class="p-3 ns-box-body space-y-3">
-                    <p class="text-sm text-fontcolor-soft" v-if="mealLabel">@{{ mealLabel }}</p>
+                <div class="p-3 ns-box-body space-y-3 min-h-0 overflow-y-auto flex-auto">
+                    <p class="text-sm text-fontcolor-soft break-words" v-if="mealLabel">@{{ mealLabel }}</p>
                     <textarea
                         class="w-full border border-box-edge rounded p-2 text-sm bg-box-background text-fontcolor"
                         rows="5"
@@ -291,9 +328,9 @@
                         :placeholder="labels.notePlaceholder"
                         :disabled="submitting"
                     ></textarea>
-                    <p v-if="error" class="text-sm text-error-primary" role="alert">@{{ error }}</p>
+                    <p v-if="error" class="text-sm text-error-primary break-words" role="alert">@{{ error }}</p>
                 </div>
-                <div class="p-2 border-t ns-box-footer flex justify-end gap-2">
+                <div class="p-2 border-t ns-box-footer flex justify-end gap-2 shrink-0 flex-wrap">
                     <button type="button" class="rounded px-3 py-2 text-sm" @click="cancel" :disabled="submitting">@{{ labels.cancel }}</button>
                     <button type="button" class="rounded px-3 py-2 text-sm bg-info-tertiary text-info-primary disabled:opacity-50" @click="save" :disabled="submitting">
                         @{{ submitting ? labels.saving : labels.save }}
@@ -365,19 +402,19 @@
             },
         },
         template: `
-            <div id="zash-dine-cancel-meal-popup" class="shadow-lg w-[85.71vw] md:w-[42.86vw] overflow-hidden flex flex-col ns-box" role="dialog" aria-modal="true" :aria-label="labels.cancelTitle">
-                <div class="p-2 border-b ns-box-header text-fontcolor flex justify-between items-center">
-                    <h3 class="font-semibold">@{{ labels.cancelTitle }}</h3>
-                    <button type="button" class="outline-hidden ns-close-button hover:border-transparent border rounded-full h-6 min-w-[1.5rem] flex items-center justify-center" @click="cancel" :aria-label="labels.close || labels.keepMeal">
+            <div id="zash-dine-cancel-meal-popup" class="${popupShellClass}" role="dialog" aria-modal="true" :aria-label="labels.cancelTitle">
+                <div class="p-2 border-b ns-box-header text-fontcolor flex justify-between items-center shrink-0 gap-2">
+                    <h3 class="font-semibold break-words">@{{ labels.cancelTitle }}</h3>
+                    <button type="button" class="outline-hidden ns-close-button hover:border-transparent border rounded-full h-6 min-w-[1.5rem] flex items-center justify-center shrink-0" @click="cancel" :aria-label="labels.close || labels.keepMeal">
                         <i class="las la-times text-xs"></i>
                     </button>
                 </div>
-                <div class="p-3 ns-box-body space-y-3">
-                    <p class="text-sm text-fontcolor">@{{ labels.confirmCancel }}</p>
-                    <p class="text-sm font-medium text-fontcolor" v-if="mealLabel">@{{ mealLabel }}</p>
-                    <p v-if="error" class="text-sm text-error-primary" role="alert">@{{ error }}</p>
+                <div class="p-3 ns-box-body space-y-3 min-h-0 overflow-y-auto flex-auto">
+                    <p class="text-sm text-fontcolor break-words">@{{ labels.confirmCancel }}</p>
+                    <p class="text-sm font-medium text-fontcolor break-words" v-if="mealLabel">@{{ mealLabel }}</p>
+                    <p v-if="error" class="text-sm text-error-primary break-words" role="alert">@{{ error }}</p>
                 </div>
-                <div class="p-2 border-t ns-box-footer flex justify-end gap-2">
+                <div class="p-2 border-t ns-box-footer flex justify-end gap-2 shrink-0 flex-wrap">
                     <button type="button" class="rounded px-3 py-2 text-sm" @click="cancel" :disabled="submitting">@{{ labels.keepMeal }}</button>
                     <button
                         type="button"

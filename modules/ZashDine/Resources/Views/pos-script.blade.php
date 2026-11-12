@@ -15,6 +15,7 @@
             confirm: @json( __m( 'Use this table', 'ZashDine' ) ),
             confirming: @json( __m( 'Checking…', 'ZashDine' ) ),
             cancel: @json( __m( 'Cancel', 'ZashDine' ) ),
+            close: @json( __m( 'Close', 'ZashDine' ) ),
             seats: @json( __m( 'seats', 'ZashDine' ) ),
             unable: @json( __m( 'Unable to load available tables.', 'ZashDine' ) ),
             loading: @json( __m( 'Loading available tables…', 'ZashDine' ) ),

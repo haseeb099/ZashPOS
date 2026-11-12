@@ -115,10 +115,17 @@ class CreateOrderPaidWithCustomerCredit extends TestCase
             $shippingFees = $faker->randomElement( [10, 15, 20, 25, 30, 35, 40] );
             $discountRate = $faker->numberBetween( 0, 5 );
 
+            /**
+             * Use custom (non-catalog) lines only. Attaching real product_id values
+             * can 500 on depleted stock from earlier suite tests and obscure the
+             * credit-limit 403 this case is meant to assert.
+             */
             $products = $products->map( function ( $product ) use ( $faker ) {
                 $unitElement = $faker->randomElement( $product->unit_quantities );
 
-                $data = array_merge( [
+                $this->assertNotNull( $unitElement, 'Selected product is missing a unit quantity.' );
+
+                return array_merge( [
                     'name' => 'Fees',
                     'quantity' => $faker->numberBetween( 1, 10 ),
                     'unit_price' => $unitElement->sale_price,
@@ -126,13 +133,6 @@ class CreateOrderPaidWithCustomerCredit extends TestCase
                     'tax_group_id' => 1,
                     'unit_id' => $unitElement->unit_id,
                 ], $this->customProductParams );
-
-                if ( $faker->randomElement( [ false, true ] ) ) {
-                    $data[ 'product_id' ] = $product->id;
-                    $data[ 'unit_quantity_id' ] = $unitElement->id;
-                }
-
-                return $data;
             } )->filter( function ( $product ) {
                 return $product[ 'quantity' ] > 0;
             } );
@@ -207,7 +207,11 @@ class CreateOrderPaidWithCustomerCredit extends TestCase
 
             $amount = ns()->currency->define( 5 )->format();
 
-            $response->assertStatus( 403 );
+            $this->assertSame(
+                403,
+                $response->status(),
+                'Expected credit-limit 403, got ' . $response->status() . ' with body: ' . substr( (string) $response->getContent(), 0, 800 )
+            );
             $response->assertJsonPath( 'message', 'By proceeding this order, the customer will exceed the maximum credit allowed for his account: ' . $amount . '.' );
         }
 

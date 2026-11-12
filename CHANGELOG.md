@@ -6,6 +6,10 @@ Tracks ZashPOS changes only, in Keep a Changelog style. Upstream NexoPOS notes s
 
 ### Added
 - ZashDine Phase 2c: Vue popups via core `Popup.show` for the POS dine-in table picker (tables grouped by area) and Floor meal note / cancel-meal confirmation. Native `window.prompt` / `window.confirm` are removed for those flows.
+- ZashDine Phase 2c follow-up: table-picker race notice survives availability refresh (selection cleared until a free table is chosen again), popup shells stay within the viewport on tablet sizes, and Playwright covers empty/retry/race/dismiss/note-cancel error paths.
+
+### Fixed
+- `CreateOrderPaidWithCustomerCredit` no longer attaches catalog `product_id` lines during the credit-limit probe, so depleted stock from earlier suite tests cannot turn the expected 403 into a 500.
 - ZashDine Playwright suite in `e2e/` (own package and lockfile): order types, areas/tables, permissions, dine-in POS, held-order edits, waiter note/cancel, concurrent table claims, and tablet screenshots. Setup uses `.env.e2e` and `database/e2e.sqlite`.
 - ZashDine Phase 2b: POS order type "Dine-in" that requires a table (locked with `lockForUpdate`), occupies the table and creates `zash_dine_order_items`, frees the table on pay/void/delete, and waiter cancel-meal / add-note APIs with Floor UI actions.
 - ZashDine Phase 2b review: pre-create occupancy check (no orphan orders), sync kitchen rows on order update, cancel meal removes the product from unpaid orders (total/stock), safer `ns_pos_order_types` migration that never drops core defaults, and meal actions blocked when the order is no longer active.
