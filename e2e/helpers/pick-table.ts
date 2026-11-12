@@ -1,33 +1,28 @@
-import type { Dialog, Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 
 /**
- * Accepts the dine-in table window.prompt.
- * Phase 2c should only need to change this helper when prompts become popups.
- *
- * Return dialog.accept() from the listener so Playwright can finish the click
- * that opened the prompt.
+ * Selects a dine-in table through the ZashDine Vue picker popup.
  */
-export function pickTable(page: Page, tableName: string, fallbackId?: number): Promise<string> {
-    return new Promise((resolve, reject) => {
-        page.once('dialog', (dialog: Dialog) => {
-            if (dialog.type() !== 'prompt' || !dialog.message().includes('Select a table')) {
-                reject(new Error(`Expected the dine-in table prompt, received: ${dialog.message()}`));
+export async function pickTable(page: Page, tableName: string, _fallbackId?: number): Promise<string> {
+    const popup = page.locator('#zash-dine-table-picker');
+    await expect(popup).toBeVisible({ timeout: 20000 });
+    await expect(popup.getByRole('button', { name: new RegExp(tableName) })).toBeVisible({ timeout: 15000 });
+    await popup.getByRole('button', { name: new RegExp(tableName) }).click();
+    await popup.getByRole('button', { name: 'Use this table', exact: true }).click();
+    await expect(popup).toBeHidden({ timeout: 15000 });
 
-                return dialog.dismiss();
-            }
+    return tableName;
+}
 
-            const line = dialog.message().split('\n').find((row) => row.includes(tableName));
-            const tableId = line?.split(':')[0]?.trim() || (fallbackId ? String(fallbackId) : '');
+export async function expectNoAvailableTablesPopup(page: Page): Promise<void> {
+    const popup = page.locator('#zash-dine-table-picker');
+    await expect(popup).toBeVisible({ timeout: 20000 });
+    await expect(popup.getByText(/No available tables/i)).toBeVisible();
+}
 
-            if (tableId === '') {
-                reject(new Error(`Table "${tableName}" was not offered.\n${dialog.message()}`));
-
-                return dialog.dismiss();
-            }
-
-            return dialog.accept(tableId).then(() => {
-                resolve(tableId);
-            });
-        });
-    });
+export async function cancelTablePicker(page: Page): Promise<void> {
+    const popup = page.locator('#zash-dine-table-picker');
+    await expect(popup).toBeVisible({ timeout: 20000 });
+    await popup.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(popup).toBeHidden({ timeout: 15000 });
 }

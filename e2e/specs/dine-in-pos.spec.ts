@@ -61,9 +61,8 @@ test('dine-in occupies a table, rejects a second order, then frees on pay or del
         await floor.close();
 
         /**
-         * The dine-in prompt only opens when at least one free table exists.
-         * Keep a spare free table so the occupied-table rejection can still
-         * type the occupied id through the prompt fallback.
+         * Keep a spare free table so the picker can open, then swap the chosen
+         * table id to the occupied one before submit (race after selection).
          */
         const spare = await createAreaAndTable(page, 'E2E spare');
 
@@ -74,14 +73,15 @@ test('dine-in occupies a table, rejects a second order, then frees on pay or del
             const ordersBeforeReject = await orderCount(page);
             await page.locator('#pay-button').click();
             await expect(page.getByText('Define The Order Type')).toBeVisible();
-            const prompt = Promise.race([
-                pickTable(page, created.tableName, created.tableId),
-                new Promise<string>((_, reject) => {
-                    setTimeout(() => reject(new Error('Timed out waiting for occupied-table dine-in prompt.')), 20000);
-                }),
-            ]);
             await page.getByText('Dine-in', { exact: true }).click();
-            await prompt;
+            await pickTable(page, spare.tableName, spare.tableId);
+            await page.evaluate((occupiedTableId) => {
+                const pos = (window as unknown as { POS: { order: { getValue: () => Record<string, unknown>; next: (order: Record<string, unknown>) => void } } }).POS;
+                const order = pos.order.getValue();
+                order.zash_dine_table_id = occupiedTableId;
+                order.zash_dine_table_name = 'occupied-race';
+                pos.order.next(order);
+            }, created.tableId);
             await page.getByRole('button', { name: /Save As Unpaid/ }).click();
             await page.locator('#confirm-popup').getByRole('button', { name: 'Yes' }).click();
             await expect(page.locator('#snack-wrapper')).toContainText(/already occupied/i);

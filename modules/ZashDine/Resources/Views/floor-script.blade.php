@@ -20,11 +20,26 @@
         meals: @json( __m( 'Meals', 'ZashDine' ) ),
         cancelMeal: @json( __m( 'Cancel meal', 'ZashDine' ) ),
         addNote: @json( __m( 'Add note', 'ZashDine' ) ),
-        notePrompt: @json( __m( 'Note for this meal', 'ZashDine' ) ),
         cancelled: @json( __m( 'Cancelled', 'ZashDine' ) ),
         noteSaved: @json( __m( 'Note saved.', 'ZashDine' ) ),
         mealCancelled: @json( __m( 'Meal cancelled.', 'ZashDine' ) ),
-        confirmCancel: @json( __m( 'Cancel this meal?', 'ZashDine' ) ),
+        confirmCancel: @json( __m( 'Cancel this meal? It will be removed from the unpaid bill.', 'ZashDine' ) ),
+        noteTitle: @json( __m( 'Meal note', 'ZashDine' ) ),
+        notePlaceholder: @json( __m( 'Note for this meal', 'ZashDine' ) ),
+        cancelTitle: @json( __m( 'Cancel meal', 'ZashDine' ) ),
+        keepMeal: @json( __m( 'Keep meal', 'ZashDine' ) ),
+        close: @json( __m( 'Close', 'ZashDine' ) ),
+        cancel: @json( __m( 'Cancel', 'ZashDine' ) ),
+        save: @json( __m( 'Save note', 'ZashDine' ) ),
+        saving: @json( __m( 'Saving…', 'ZashDine' ) ),
+        cancelling: @json( __m( 'Cancelling…', 'ZashDine' ) ),
+    };
+
+    const mealLabel = ( item ) => {
+        const quantity = item.quantity || 1;
+        const name = item.name || ( '#' + item.id );
+
+        return `${quantity} × ${name}`;
     };
 
     nsExtraComponents['zash-dine-floor'] = {
@@ -75,44 +90,55 @@
                 return status === 'occupied' ? labels.occupied : labels.available;
             },
             cancelMeal( item ) {
-                if ( item.status === 'cancelled' ) {
+                if ( item.status === 'cancelled' || typeof Popup === 'undefined' || typeof window.ZashDineCancelMealPopup === 'undefined' ) {
                     return;
                 }
 
-                if ( ! window.confirm( labels.confirmCancel ) ) {
-                    return;
-                }
+                const previousFocus = document.activeElement;
 
-                nsHttpClient.post( `/api/zash-dine/order-items/${item.id}/cancel` ).subscribe({
-                    next: () => {
-                        nsSnackBar.success( labels.mealCancelled );
-                        this.loadFloor( false );
-                    },
-                    error: ( error ) => {
-                        nsSnackBar.error( error?.message || labels.unable );
-                    },
-                });
+                new Promise( ( resolve, reject ) => {
+                    Popup.show( window.ZashDineCancelMealPopup, {
+                        itemId: item.id,
+                        mealLabel: mealLabel( item ),
+                        labels,
+                        previousFocus,
+                        resolve,
+                        reject,
+                    }, {
+                        closeOnOverlayClick: false,
+                    } );
+                } ).then( () => {
+                    nsSnackBar.success( labels.mealCancelled );
+                    this.loadFloor( false );
+                } ).catch( () => {
+                    // Dismissed without cancelling.
+                } );
             },
             addNote( item ) {
-                if ( item.status === 'cancelled' ) {
+                if ( item.status === 'cancelled' || typeof Popup === 'undefined' || typeof window.ZashDineNotePopup === 'undefined' ) {
                     return;
                 }
 
-                const note = window.prompt( labels.notePrompt, item.note || '' );
+                const previousFocus = document.activeElement;
 
-                if ( note === null ) {
-                    return;
-                }
-
-                nsHttpClient.put( `/api/zash-dine/order-items/${item.id}/note`, { note } ).subscribe({
-                    next: () => {
-                        nsSnackBar.success( labels.noteSaved );
-                        this.loadFloor( false );
-                    },
-                    error: ( error ) => {
-                        nsSnackBar.error( error?.message || labels.unable );
-                    },
-                });
+                new Promise( ( resolve, reject ) => {
+                    Popup.show( window.ZashDineNotePopup, {
+                        itemId: item.id,
+                        note: item.note || '',
+                        mealLabel: mealLabel( item ),
+                        labels,
+                        previousFocus,
+                        resolve,
+                        reject,
+                    }, {
+                        closeOnOverlayClick: false,
+                    } );
+                } ).then( () => {
+                    nsSnackBar.success( labels.noteSaved );
+                    this.loadFloor( false );
+                } ).catch( () => {
+                    // Dismissed without saving.
+                } );
             },
         },
         template: `

@@ -102,7 +102,9 @@ test('an area with an occupied table cannot be disabled or deleted', async ({ pa
         await search.press('Enter');
         const row = page.locator('tr').filter({ hasText: created.areaName });
         await row.getByRole('button', { name: 'Options' }).click();
-        await page.getByRole('menuitem', { name: /Delete/ }).click();
+        const deleteItem = page.getByRole('menuitem', { name: /Delete/ });
+        await expect(deleteItem).toBeVisible();
+        await deleteItem.click({ force: true });
         await page.locator('#confirm-popup').getByRole('button', { name: 'Yes' }).click();
         await expectSnack(page, /Unable to delete an area that has occupied tables/i);
     } finally {

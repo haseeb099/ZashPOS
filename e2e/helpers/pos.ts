@@ -64,14 +64,8 @@ export async function addProduct(page: Page, productName: string): Promise<void>
 
 async function chooseDineIn(page: Page, tableName: string, fallbackId?: number): Promise<void> {
     await expect(page.getByText('Define The Order Type')).toBeVisible();
-    const prompt = Promise.race([
-        pickTable(page, tableName, fallbackId),
-        new Promise<string>((_, reject) => {
-            setTimeout(() => reject(new Error(`Timed out waiting for the dine-in table prompt for "${tableName}".`)), 20000);
-        }),
-    ]);
     await page.getByText('Dine-in', { exact: true }).click();
-    await prompt;
+    await pickTable(page, tableName, fallbackId);
 }
 
 export async function saveUnpaidDineIn(page: Page, tableName: string): Promise<void> {

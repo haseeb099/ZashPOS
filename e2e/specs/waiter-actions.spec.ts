@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { authState } from '../helpers/auth';
 import { apiResult, createAreaAndTable, deleteAreaAndTable, listProducts, productStock } from '../helpers/api';
-import { armConfirm, armPrompt, expectTableStatus, readFloorTable, tableCard } from '../helpers/floor';
+import { confirmCancelMeal, expectTableStatus, readFloorTable, saveMealNote, tableCard } from '../helpers/floor';
 import { addProduct, openOrderFromTab, openPos, payInFull, payPartial, saveUnpaidDineIn } from '../helpers/pos';
 import { baseURL } from '../load-env';
 
@@ -32,14 +32,12 @@ test('waiter notes and cancels meals, and paid or partial cancels stay blocked',
         unpaidOrder = before?.current_order_id ?? null;
         const totalBefore = Number(before?.order?.total);
         const card = tableCard(page, unpaidTable.tableName);
-        const prompt = armPrompt(page, note);
         await card.getByRole('button', { name: 'Add note' }).click();
-        await prompt;
+        await saveMealNote(page, note);
         await expect.poll(async () => card.getByText(note).count(), { timeout: 12000 }).toBeGreaterThan(0);
 
-        const confirm = armConfirm(page);
         await card.getByRole('button', { name: 'Cancel meal' }).click();
-        await confirm;
+        await confirmCancelMeal(page);
         await expect(page.locator('#snack-wrapper')).toContainText(/Meal cancelled/i);
         await expect.poll(async () => Number((await readFloorTable(page, unpaidTable.tableName))?.order?.total), {
             timeout: 12000,
@@ -52,10 +50,13 @@ test('waiter notes and cancels meals, and paid or partial cancels stay blocked',
         await page.goto('/dashboard/zash-dine/floor');
         await expectTableStatus(page, partialTable.tableName, 'Occupied');
         partialOrder = (await readFloorTable(page, partialTable.tableName))?.current_order_id ?? null;
-        const partialConfirm = armConfirm(page);
         await tableCard(page, partialTable.tableName).getByRole('button', { name: 'Cancel meal' }).click();
-        await partialConfirm;
-        await expect(page.locator('#snack-wrapper')).toContainText(/Use a refund instead/i);
+        const cancelPopup = page.locator('#zash-dine-cancel-meal-popup');
+        await expect(cancelPopup).toBeVisible({ timeout: 15000 });
+        await cancelPopup.getByRole('button', { name: 'Cancel meal', exact: true }).click();
+        await expect(cancelPopup.getByRole('alert')).toContainText(/Use a refund instead/i);
+        await cancelPopup.locator('button', { hasText: /^Keep meal$/ }).click();
+        await expect(cancelPopup).toBeHidden({ timeout: 15000 });
         expect((await readFloorTable(page, partialTable.tableName))?.items[0]?.status).not.toBe('cancelled');
 
         await openPos(page);
