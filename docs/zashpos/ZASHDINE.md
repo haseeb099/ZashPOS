@@ -35,6 +35,7 @@ areas, tables, kitchens, kitchen_categories, order_items, modifier_groups, modif
 - Phase 1: skeleton, permissions, migrations, menu, settings page, smoke test
 - Phase 2a: areas and tables CRUD, unique table name per area, floor view with polling
 - Phase 2b: dine-in POS order type, table lock/occupy/free, waiter cancel/note actions
+- Phase 2c: Vue table picker + Floor note/cancel popups (core `Popup.show`)
 - Phase 3: category to kitchen routing, kitchen screen, Reverb live updates with polling fallback
 - Phase 4: modifier groups and modifiers with stock
 - Phase 5: manual QA, packaging as an installable zip
@@ -68,4 +69,6 @@ npm run report
 The host `phpunit.xml` includes a `ZashDine` testsuite (`modules/ZashDine/Tests`), so a plain `php artisan test --compact` run also executes the module tests.
 
 ## Status
-Phase 2b ready for review on `phase-2b-dine-in-pos` (includes master timezone runtime remap from PR #27). Not merged; Phase 2c Vue popups not started.
+Phase 2b merged (`bb2a8289f`). Phase 2c Vue popups on `phase-2c-vue-popups` (table picker + Floor note/cancel). Phase 3 not started.
+
+POS dine-in opens `#zash-dine-table-picker` when the cart has no table yet; reopened/held dine-in orders keep `zash_dine_table_id` and skip the picker. Confirm re-checks `/api/zash-dine/tables/available` before resolve; a race clears the selection, keeps a visible notice while the list refreshes, and requires choosing an available table again. Floor note/cancel use `#zash-dine-note-popup` / `#zash-dine-cancel-meal-popup` and close only after a successful API response (errors stay in the popup). Popup shells are capped to the viewport (`min(36rem, 100vw-2rem)` / `min(80vh, 100vh-2rem)`) so tablet footers stay reachable.

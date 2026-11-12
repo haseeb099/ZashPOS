@@ -49,14 +49,24 @@ export async function expectTableStatus(page: Page, tableName: string, status: '
     }).toBeGreaterThan(0);
 }
 
-export function armPrompt(page: Page, value: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-        page.once('dialog', (dialog) => dialog.accept(value).then(resolve, reject));
-    });
+export async function saveMealNote(page: Page, value: string): Promise<void> {
+    const popup = page.locator('#zash-dine-note-popup');
+    await expect(popup).toBeVisible({ timeout: 15000 });
+    await popup.locator('textarea').fill(value);
+    await popup.getByRole('button', { name: 'Save note', exact: true }).click();
+    await expect(popup).toBeHidden({ timeout: 15000 });
 }
 
-export function armConfirm(page: Page): Promise<void> {
-    return new Promise((resolve, reject) => {
-        page.once('dialog', (dialog) => dialog.accept().then(resolve, reject));
-    });
+export async function confirmCancelMeal(page: Page): Promise<void> {
+    const popup = page.locator('#zash-dine-cancel-meal-popup');
+    await expect(popup).toBeVisible({ timeout: 15000 });
+    await popup.getByRole('button', { name: 'Cancel meal', exact: true }).click();
+    await expect(popup).toBeHidden({ timeout: 15000 });
+}
+
+export async function dismissCancelMeal(page: Page): Promise<void> {
+    const popup = page.locator('#zash-dine-cancel-meal-popup');
+    await expect(popup).toBeVisible({ timeout: 15000 });
+    await popup.locator('button', { hasText: /^Keep meal$/ }).click();
+    await expect(popup).toBeHidden({ timeout: 15000 });
 }

@@ -1,7 +1,11 @@
 <script>
 (() => {
     const boot = () => {
-        if ( typeof POS === 'undefined' || typeof nsHooks === 'undefined' ) {
+        if ( typeof POS === 'undefined' || typeof nsHooks === 'undefined' || typeof Popup === 'undefined' ) {
+            return false;
+        }
+
+        if ( typeof window.ZashDineTablePickerPopup === 'undefined' ) {
             return false;
         }
 
@@ -9,59 +13,29 @@
             selectTable: @json( __m( 'Select a table for this dine-in order', 'ZashDine' ) ),
             noTables: @json( __m( 'No available tables. Free a table or create one first.', 'ZashDine' ) ),
             confirm: @json( __m( 'Use this table', 'ZashDine' ) ),
+            confirming: @json( __m( 'Checking…', 'ZashDine' ) ),
             cancel: @json( __m( 'Cancel', 'ZashDine' ) ),
+            close: @json( __m( 'Close', 'ZashDine' ) ),
             seats: @json( __m( 'seats', 'ZashDine' ) ),
             unable: @json( __m( 'Unable to load available tables.', 'ZashDine' ) ),
+            loading: @json( __m( 'Loading available tables…', 'ZashDine' ) ),
+            retry: @json( __m( 'Retry', 'ZashDine' ) ),
+            unknownArea: @json( __m( 'Area', 'ZashDine' ) ),
+            occupiedRace: @json( __m( 'That table is no longer available. Choose another table.', 'ZashDine' ) ),
         };
 
         const pickTable = () => new Promise( ( resolve, reject ) => {
-            nsHttpClient.get( '/api/zash-dine/tables/available' ).subscribe({
-                next: ( response ) => {
-                    const tables = response?.data?.tables || [];
+            const previousFocus = document.activeElement;
 
-                    if ( ! tables.length ) {
-                        nsSnackBar.error( labels.noTables );
-                        reject( false );
-                        return;
-                    }
-
-                    const options = tables.map( ( table ) => {
-                        const area = table.area_name ? ` (${table.area_name})` : '';
-                        return `${table.id}:${table.name}${area} — ${table.seats} ${labels.seats}`;
-                    } ).join( '\n' );
-
-                    const choice = window.prompt(
-                        `${labels.selectTable}\n\n${options}\n\n${labels.confirm}: enter table id`,
-                        String( tables[0].id )
-                    );
-
-                    if ( ! choice ) {
-                        reject( false );
-                        return;
-                    }
-
-                    const tableId = parseInt( choice, 10 );
-                    const selected = tables.find( ( table ) => table.id === tableId );
-
-                    if ( ! selected ) {
-                        resolve({
-                            zash_dine_table_id: tableId,
-                            zash_dine_table_name: '',
-                        });
-                        return;
-                    }
-
-                    resolve({
-                        zash_dine_table_id: selected.id,
-                        zash_dine_table_name: selected.name,
-                    });
-                },
-                error: ( error ) => {
-                    nsSnackBar.error( error?.message || labels.unable );
-                    reject( false );
-                },
-            });
-        });
+            Popup.show( window.ZashDineTablePickerPopup, {
+                labels,
+                previousFocus,
+                resolve,
+                reject,
+            }, {
+                closeOnOverlayClick: false,
+            } );
+        } );
 
         const alreadyRegistered = POS.orderTypeQueue.some(
             ( entry ) => entry?.identifier === 'zash-dine/dine-in'
@@ -73,6 +47,15 @@
                 promise: async ( selectedType ) => {
                     if ( selectedType?.identifier !== 'dine-in' ) {
                         return {};
+                    }
+
+                    const current = POS.order.getValue();
+
+                    if ( current?.zash_dine_table_id ) {
+                        return {
+                            zash_dine_table_id: current.zash_dine_table_id,
+                            zash_dine_table_name: current.zash_dine_table_name || '',
+                        };
                     }
 
                     return pickTable();

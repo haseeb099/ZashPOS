@@ -14,6 +14,7 @@
 | D-010 | `OrdersService::getOrder` eager-loads `customer.group` so reopened POS orders keep `minimal_credit_payment`; payment/layaway UI must error when group rules are missing instead of defaulting to 0 | Reopened carts previously crashed on `order.customer.group.minimal_credit_payment`; reselection was a workaround that could change the customer |
 | D-011 | Treat `minimal_credit_payment` as a finite percentage `>= 0` (backend float/integer, `0` means no minimum). Accept only finite numbers or nonblank numeric strings; blank/NaN/nonnumeric values and booleans/arrays/objects are invalid and must fail closed | `Number('')===0`, `Number(false)===0`, `Number([])===0`, `Number(true)===1`, and `NaN >= 0 === false` previously coerced or skipped layaway validation |
 | D-012 | Offer and persist only canonical IANA Zone identifiers; remap obsolescent links (e.g. `Canada/Pacific` → `America/Vancouver`) via `TimezoneCatalog` at runtime (no database rewrite of saved settings) | Backward Link names fail on some CI/system tzdata builds while preserving the same DST/offset rules as the Zone target |
+| D-013 | Dine-in table pick, meal note and meal cancel use module-owned Vue popups through core `Popup.show` (Options API templates), not `window.prompt` / `window.confirm` | Touch-friendly POS/Floor UX with loading/error/retry, Escape/X dismissal, focus restore, and no double-submit; server occupancy checks stay authoritative |
 
 ## How to add a decision
 Add a row with the next ID, the decision and the reason.
