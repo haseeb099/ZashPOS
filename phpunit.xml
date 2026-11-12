@@ -63,9 +63,13 @@
       <directory suffix="ComputeTaxesFromSales.php">./tests/Feature</directory>
       <directory suffix="CanSeeReportsTest.php">./tests/Feature</directory>
       <directory suffix="CustomerRouteTest.php">./tests/Feature</directory>
+      <directory suffix="PosLoadedOrderCustomerGroupTest.php">./tests/Feature</directory>
       <directory suffix="CreateUserTest.php">./tests/Feature</directory>
       <directory suffix="ProviderRoutePermissionTest.php">./tests/Feature</directory>
       <directory suffix="ApiRoutePermissionTest.php">./tests/Feature</directory>
+    </testsuite>
+    <testsuite name="ZashDine">
+      <directory suffix="Test.php">./modules/ZashDine/Tests</directory>
     </testsuite>
   </testsuites>
   <coverage>

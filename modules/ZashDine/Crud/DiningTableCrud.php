@@ -43,6 +43,10 @@ class DiningTableCrud extends CrudService
         'delete' => 'zash.dine.manage',
     ];
 
+    public $skippable = [
+        'status_display',
+    ];
+
     public function getLabels()
     {
         return CrudTable::labels(
@@ -92,17 +96,16 @@ class DiningTableCrud extends CrudService
                             'description' => __m( 'How many guests this table can seat.', 'ZashDine' ),
                             'validation' => 'required|min:1',
                         ],
-                        [
-                            'type' => 'select',
-                            'name' => 'status',
+                        ...( $entry ? [[
+                            'type' => 'text',
+                            'name' => 'status_display',
                             'label' => __m( 'Status', 'ZashDine' ),
-                            'value' => $entry->status ?? DiningTable::STATUS_AVAILABLE,
-                            'options' => Helper::kvToJsOptions( [
-                                DiningTable::STATUS_AVAILABLE => __m( 'Available', 'ZashDine' ),
-                                DiningTable::STATUS_OCCUPIED => __m( 'Occupied', 'ZashDine' ),
-                            ] ),
-                            'description' => __m( 'Current occupancy. Occupied tables cannot be deleted.', 'ZashDine' ),
-                        ],
+                            'value' => $entry->isOccupied()
+                                ? __m( 'Occupied (system-managed)', 'ZashDine' )
+                                : __m( 'Available (system-managed)', 'ZashDine' ),
+                            'description' => __m( 'Occupancy is set automatically when dine-in orders start or finish. It cannot be changed here.', 'ZashDine' ),
+                            'disabled' => true,
+                        ]] : [] ),
                     ],
                 ],
             ],
@@ -112,8 +115,9 @@ class DiningTableCrud extends CrudService
     public function filterPostInputs( $inputs )
     {
         $inputs['seats'] = max( 1, (int) ( $inputs['seats'] ?? 2 ) );
-        $inputs['status'] = $inputs['status'] ?: DiningTable::STATUS_AVAILABLE;
+        $inputs['status'] = DiningTable::STATUS_AVAILABLE;
         $inputs['area_id'] = $inputs['area_id'] ?: null;
+        unset( $inputs['status_display'] );
 
         return $inputs;
     }
@@ -121,14 +125,17 @@ class DiningTableCrud extends CrudService
     public function filterPutInputs( $inputs, DiningTable $entry )
     {
         $inputs['seats'] = max( 1, (int) ( $inputs['seats'] ?? $entry->seats ?? 2 ) );
-        $inputs['status'] = $inputs['status'] ?: DiningTable::STATUS_AVAILABLE;
+        $inputs['status'] = $entry->status ?: DiningTable::STATUS_AVAILABLE;
         $inputs['area_id'] = $inputs['area_id'] ?: null;
+        unset( $inputs['status_display'] );
 
         return $inputs;
     }
 
-    public function beforePost( $request )
+    public function beforePost( $request, $entry = null, $inputs = [] )
     {
+        $this->assertUniqueNameInArea( $inputs );
+
         return $request;
     }
 
@@ -137,8 +144,10 @@ class DiningTableCrud extends CrudService
         return $request;
     }
 
-    public function beforePut( $request, $entry )
+    public function beforePut( $request, $entry, $inputs = [] )
     {
+        $this->assertUniqueNameInArea( $inputs, $entry->id );
+
         return $request;
     }
 
@@ -260,5 +269,29 @@ class DiningTableCrud extends CrudService
     public function hook( $query ): void
     {
         $query->orderBy( 'name', 'asc' );
+    }
+
+    private function assertUniqueNameInArea( array $inputs, ?int $ignoreId = null ): void
+    {
+        $name = trim( (string) ( $inputs['name'] ?? '' ) );
+        $areaId = $inputs['area_id'] ?? null;
+
+        if ( $name === '' || empty( $areaId ) ) {
+            return;
+        }
+
+        $query = DiningTable::query()
+            ->where( 'area_id', $areaId )
+            ->where( 'name', $name );
+
+        if ( $ignoreId ) {
+            $query->where( 'id', '!=', $ignoreId );
+        }
+
+        if ( $query->exists() ) {
+            throw new NotAllowedException(
+                __m( 'A table with this name already exists in the selected area.', 'ZashDine' )
+            );
+        }
     }
 }

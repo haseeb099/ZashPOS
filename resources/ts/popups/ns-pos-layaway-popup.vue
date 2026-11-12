@@ -7,9 +7,12 @@
             </div>
         </div>
         <div v-if="order" class="p-2 flex-auto flex flex-col relative overflow-y-auto">
-            <div class="p-2 rounded elevation-surface info mb-2 text-center text-xl font-bold flex justify-between">
+            <div v-if="hasCustomerPaymentRules" class="p-2 rounded elevation-surface info mb-2 text-center text-xl font-bold flex justify-between">
                 <span>{{ __( 'Minimum Payment' ) }}</span>
                 <span>{{ nsCurrency( expectedPayment ) }}</span>
+            </div>
+            <div v-else class="p-2 rounded elevation-surface error mb-2 text-center text-sm font-semibold">
+                {{ __( 'Customer payment rules are unavailable or invalid. Keep the current customer and reload the order.' ) }}
             </div>
             <div>
                 <ns-field v-for="( field, index ) of fields" :field="field" :key="index"></ns-field>
@@ -105,11 +108,33 @@ export default {
     },
     mounted() {
         this.order = Object.assign( {}, this.popup.params.order );
+
+        if ( ! this.hasCustomerPaymentRules ) {
+            nsSnackBar.error( __( 'Customer payment rules are unavailable or invalid. Keep the current customer and reload the order.' ) );
+            this.popup.params.reject({
+                status: 'error',
+                message: __( 'Customer payment rules are unavailable or invalid. Keep the current customer and reload the order.' ),
+            });
+            this.popup.close();
+            return;
+        }
+
         this.loadFields();
     },
     computed: {
+        hasCustomerPaymentRules() {
+            if ( ! this.order ) {
+                return false;
+            }
+
+            return POS.hasValidCustomerPaymentRules( this.order );
+        },
         expectedPayment() {
-            const minimalPaymentPercent     =   this.order.customer.group.minimal_credit_payment;
+            if ( ! this.hasCustomerPaymentRules ) {
+                return null;
+            }
+
+            const minimalPaymentPercent     =   POS.resolveMinimalCreditPaymentPercent( this.order );
             return nsRawCurrency( ( this.order.total * minimalPaymentPercent ) / 100 );
         },
     },
@@ -175,6 +200,10 @@ export default {
             this.popup.close();
         },
         skipInstalments() {
+            if ( ! this.hasCustomerPaymentRules ) {
+                return nsSnackBar.error( __( 'Customer payment rules are unavailable or invalid. Keep the current customer and reload the order.' ) );
+            }
+
             /**
              * instalments should be registered
              * only if there is a valid minimal
@@ -208,6 +237,10 @@ export default {
             return resolve({ order: this.order, skip_layaway: true });
         },
         updateOrder() {
+            if ( ! this.hasCustomerPaymentRules ) {
+                return nsSnackBar.error( __( 'Customer payment rules are unavailable or invalid. Keep the current customer and reload the order.' ) );
+            }
+
             if ( this.order.instalments.length === 0 ) {
                 return nsSnackBar.error( __( 'Please provide instalments before proceeding.' ) );
             }

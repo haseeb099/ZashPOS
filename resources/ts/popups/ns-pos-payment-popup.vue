@@ -33,8 +33,19 @@ export default {
         } 
     },
     computed: {
+        hasCustomerPaymentRules() {
+            if ( ! this.order ) {
+                return false;
+            }
+
+            return POS.hasValidCustomerPaymentRules( this.order );
+        },
         expectedPayment() {
-            const minimalPaymentPercent     =   this.order.customer.group.minimal_credit_payment;
+            if ( ! this.hasCustomerPaymentRules ) {
+                return null;
+            }
+
+            const minimalPaymentPercent     =   POS.resolveMinimalCreditPaymentPercent( this.order );
             return ( this.order.total * minimalPaymentPercent ) / 100;
         }
     },
@@ -130,6 +141,10 @@ export default {
         },
         // no payment is necessary here so we'll proceed
         async submiAsUnpaid() {
+            if ( ! this.hasCustomerPaymentRules ) {
+                return nsSnackBar.error( __( 'Customer payment rules are unavailable or invalid. Keep the current customer and reload the order.' ) );
+            }
+
             return new Promise( ( resolve, reject ) => {
                 Popup.show( nsConfirmPopup, {
                     title: __( 'Save As Unpaid' ),
@@ -182,6 +197,10 @@ export default {
             return payment.identifier;
         },
         submitOrder( data = {}) {
+            if ( ! this.hasCustomerPaymentRules ) {
+                return nsSnackBar.error( __( 'Customer payment rules are unavailable or invalid. Keep the current customer and reload the order.' ) );
+            }
+
             const popup     =   Popup.show( nsPosLoadingPopupVue );
             
             try {
@@ -282,10 +301,10 @@ export default {
                     <button @click="selectPayment()" class="flex items-center justify-center w-1/3 text-2xl flex-auto h-12 font-bold ns-payment-type-button">
                         <span class="text-sm">{{ __( 'Payment Type' ) }}</span>
                     </button>
-                    <button v-if="order.tendered >= order.total" @click="submitOrder()" class="flex items-center justify-center w-1/3 text-2xl flex-auto h-12 ns-submit-button font-bold">
+                    <button v-if="order.tendered >= order.total && hasCustomerPaymentRules" @click="submitOrder()" class="flex items-center justify-center w-1/3 text-2xl flex-auto h-12 ns-submit-button font-bold">
                         <span class="text-sm">{{ __( 'Submit Payment' ) }}</span>
                     </button>
-                    <button v-if="order.tendered < order.total" @click="submitOrder({ payment_status: 'unpaid' })" class="flex items-center justify-center w-1/3 text-2xl flex-auto h-12 ns-layaway-button font-bold">
+                    <button v-if="order.tendered < order.total && hasCustomerPaymentRules" @click="submitOrder({ payment_status: 'unpaid' })" class="flex items-center justify-center w-1/3 text-2xl flex-auto h-12 ns-layaway-button font-bold">
                         <span class="text-sm">{{ __( 'Layaway' ) }}</span>
                     </button>
                     <button @click="showPayment = true" class="w-1/3 flex ns-payment-button text-2xl flex-auto h-12 items-center justify-center font-bold">
@@ -295,20 +314,26 @@ export default {
                 </div>
                 <div v-if="activePayment" class="flex-col sm:flex-row w-full ns-payment-footer justify-end p-2 hidden lg:flex">
                     <div class="flex justify-end">
-                        <ns-button v-if="order.tendered >= order.total" @click="submitOrder()" :type="order.tendered >= order.total ? 'success' : 'info'">
+                        <ns-button v-if="order.tendered >= order.total && hasCustomerPaymentRules" @click="submitOrder()" :type="order.tendered >= order.total ? 'success' : 'info'">
                             <span ><i class="las la-cash-register"></i> {{ __( 'Submit Payment' ) }}</span>
+                        </ns-button>
+                        <ns-button v-if="order.tendered >= order.total && ! hasCustomerPaymentRules" disabled :type="'info'">
+                            <span><i class="las la-exclamation-triangle"></i> {{ __( 'Payment rules unavailable' ) }}</span>
                         </ns-button>
                         <div v-if="order.tendered < order.total" class="flex -mx-2">
                             <div class="px-2">
-                                <ns-button v-if="order.tendered === 0" @click="submitOrder({ payment_status: 'unpaid' })" :type="order.tendered >= order.total ? 'success' : 'info'">
+                                <ns-button v-if="order.tendered === 0 && hasCustomerPaymentRules" @click="submitOrder({ payment_status: 'unpaid' })" :type="order.tendered >= order.total ? 'success' : 'info'">
                                     <span><i class="las la-bookmark"></i> {{ __( 'Layaway' ) }} &mdash; {{ nsCurrency( expectedPayment ) }}</span>
-                                </ns-button>                         
-                                <ns-button v-if="order.tendered > 0" @click="submitOrder({ payment_status: 'unpaid' })" type="info">
+                                </ns-button>
+                                <ns-button v-if="order.tendered === 0 && ! hasCustomerPaymentRules" disabled :type="'info'">
+                                    <span><i class="las la-exclamation-triangle"></i> {{ __( 'Payment rules unavailable' ) }}</span>
+                                </ns-button>
+                                <ns-button v-if="order.tendered > 0 && hasCustomerPaymentRules" @click="submitOrder({ payment_status: 'unpaid' })" type="info">
                                     <span><i class="las la-save"></i> {{ __( 'Update' ) }}</span>
                                 </ns-button>                         
                             </div>
                             <div class="px-2" v-if="order.tendered === 0">
-                                <ns-button @click="submiAsUnpaid()" :type="'info'">
+                                <ns-button @click="submiAsUnpaid()" :type="'info'" :disabled="! hasCustomerPaymentRules">
                                     <span><i class="las la-hands-helping"></i> {{ __( 'Save As Unpaid' ) }}</span>
                                 </ns-button>                         
                             </div>

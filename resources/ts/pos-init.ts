@@ -999,9 +999,93 @@ export class POS {
      * might request additionnal information through a popup.
      * @param order Order
      */
+    /**
+     * Customer-group minimum credit payment is a percentage.
+     * Backend stores a numeric value defaulting to 0 (no minimum) and
+     * casts with (float). Accept only:
+     * - a finite number >= 0
+     * - a nonblank string that converts to a finite number >= 0
+     * Reject missing, blank, nonnumeric, nonfinite values, and also
+     * booleans/arrays/objects (Number(false)===0, Number([])===0, Number(true)===1).
+     */
+    resolveMinimalCreditPaymentPercent(order: Order | any): number {
+        const group = order?.customer?.group;
+
+        if ( group === undefined || group === null ) {
+            throw {
+                status: 'error',
+                message: __( 'Customer payment rules are unavailable. Keep the current customer and reload the order.' ),
+            };
+        }
+
+        const raw = group.minimal_credit_payment;
+
+        if ( raw === undefined || raw === null ) {
+            throw {
+                status: 'error',
+                message: __( 'Customer payment rules are unavailable. Keep the current customer and reload the order.' ),
+            };
+        }
+
+        if ( typeof raw === 'number' ) {
+            if ( ! Number.isFinite( raw ) || raw < 0 ) {
+                throw {
+                    status: 'error',
+                    message: __( 'Customer payment rules are invalid. Keep the current customer and reload the order.' ),
+                };
+            }
+
+            return raw;
+        }
+
+        if ( typeof raw === 'string' ) {
+            const trimmed = raw.trim();
+
+            if ( trimmed === '' ) {
+                throw {
+                    status: 'error',
+                    message: __( 'Customer payment rules are invalid. Keep the current customer and reload the order.' ),
+                };
+            }
+
+            const percent = Number( trimmed );
+
+            if ( ! Number.isFinite( percent ) || percent < 0 ) {
+                throw {
+                    status: 'error',
+                    message: __( 'Customer payment rules are invalid. Keep the current customer and reload the order.' ),
+                };
+            }
+
+            return percent;
+        }
+
+        throw {
+            status: 'error',
+            message: __( 'Customer payment rules are invalid. Keep the current customer and reload the order.' ),
+        };
+    }
+
+    hasValidCustomerPaymentRules(order: Order | any): boolean {
+        try {
+            this.resolveMinimalCreditPaymentPercent( order );
+
+            return true;
+        } catch ( exception ) {
+            return false;
+        }
+    }
+
     canProceedAsLaidAway(_order: Order): { status: string, message: string, data: { order: Order } } | any {
         return new Promise(async (resolve, reject) => {
-            const minimalPaymentPercent = _order.customer.group.minimal_credit_payment;
+            let minimalPaymentPercent: number;
+
+            try {
+                minimalPaymentPercent = this.resolveMinimalCreditPaymentPercent( _order );
+            } catch ( exception ) {
+                return reject( exception );
+            }
+
             const firstPart     =   math.chain( _order.total ).multiply( minimalPaymentPercent ).done();
             let expected: any = math.chain( firstPart ).divide( 100 ).done();
             expected = parseFloat(expected);
@@ -1090,7 +1174,13 @@ export class POS {
                 ...orderFields
             };
 
-            const minimalPayment = order.customer.group.minimal_credit_payment;
+            let minimalPayment: number;
+
+            try {
+                minimalPayment = this.resolveMinimalCreditPaymentPercent( order );
+            } catch ( exception ) {
+                return reject( exception );
+            }
 
             /**
              * this verification applies only if the 
@@ -1436,9 +1526,23 @@ export class POS {
              * customer meta data
              */
             if (customer.group === undefined || customer.group === null) {
+                if ( customer.id === undefined || customer.id === null ) {
+                    return reject({
+                        status: 'error',
+                        message: __( 'Customer payment rules are unavailable because the customer is missing.' ),
+                    });
+                }
+
                 nsHttpClient.get(`/api/customers/${customer.id}/group`)
                     .subscribe({
                         next: group => {
+                            if ( group === undefined || group === null ) {
+                                return reject({
+                                    status: 'error',
+                                    message: __( 'Customer payment rules are unavailable because the customer group could not be loaded.' ),
+                                });
+                            }
+
                             order.customer.group = group;
                             this.order.next(order);
                             resolve(order);

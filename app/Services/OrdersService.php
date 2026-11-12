@@ -2173,7 +2173,7 @@ class OrdersService
                 ->with( 'products.product.tax_group.taxes' )
                 ->with( 'products.unit' )
                 ->with( 'products.product.unit_quantities' )
-                ->with( 'customer.billing', 'customer.shipping' )
+                ->with( 'customer.billing', 'customer.shipping', 'customer.group' )
                 ->first();
 
             if ( ! $order instanceof Order ) {
