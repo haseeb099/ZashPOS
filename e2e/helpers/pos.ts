@@ -567,14 +567,55 @@ export async function payPartial(page: Page, tableName: string): Promise<void> {
 }
 
 export async function deleteOrderFromList(page: Page, code: string): Promise<void> {
-    await page.goto('/dashboard/orders');
-    const search = page.locator('#crud-search-box input');
-    await search.fill(code);
-    await search.press('Enter');
-    const row = page.locator('tr').filter({ hasText: code });
-    await expect(row).toBeVisible();
-    await row.getByRole('button', { name: 'Options' }).click();
-    await page.getByRole('menuitem', { name: /Delete/ }).click();
-    await page.locator('#confirm-popup').getByRole('button', { name: 'Yes' }).click();
-    await expectSnack(page, /deleted/i);
+    const consoleErrors: string[] = [];
+    const pageErrors: string[] = [];
+    const onConsole = (message: { type: () => string; text: () => string }) => {
+        if (message.type() === 'error') {
+            consoleErrors.push(message.text());
+        }
+    };
+    const onPageError = (error: Error) => {
+        pageErrors.push(error.message);
+    };
+
+    page.on('console', onConsole);
+    page.on('pageerror', onPageError);
+
+    try {
+        await page.goto('/dashboard/orders');
+        const search = page.locator('#crud-search-box input');
+        await search.fill(code);
+        await search.press('Enter');
+        const row = page.locator('tr').filter({ hasText: code }).first();
+        await expect(row).toBeVisible({ timeout: 30000 });
+
+        /**
+         * CRUD Options opens an animated menu behind a full-page toggle overlay
+         * (ns-table-row). Playwright actionability then sees the menuitem as
+         * unstable/detached — same flake areas-tables already force-clicks past.
+         * This is selector/timing, not an order-delete API regression.
+         */
+        await row.getByRole('button', { name: 'Options' }).click();
+        const deleteItem = row.locator('.ns-menu-wrapper [role="menuitem"]').filter({ hasText: /Delete/i }).first();
+        await expect(deleteItem).toBeVisible({ timeout: 10000 });
+
+        const deleted = page.waitForResponse((response) => (
+            response.request().method() === 'DELETE'
+            && response.url().includes('/api/')
+            && response.ok()
+        ), { timeout: 30000 });
+
+        await deleteItem.click({ force: true });
+        await page.locator('#confirm-popup').getByRole('button', { name: 'Yes' }).click();
+        const deleteResponse = await deleted;
+        expect(deleteResponse.ok(), `order delete HTTP ${deleteResponse.status()}`).toBeTruthy();
+        await expectSnack(page, /deleted/i);
+    } catch (error) {
+        throw new Error(
+            `deleteOrderFromList(${code}) failed. console=${JSON.stringify(consoleErrors)} pageErrors=${JSON.stringify(pageErrors)} cause=${error instanceof Error ? error.message : String(error)}`,
+        );
+    } finally {
+        page.off('console', onConsole);
+        page.off('pageerror', onPageError);
+    }
 }

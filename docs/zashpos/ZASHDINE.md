@@ -15,8 +15,8 @@ areas, tables, kitchens, kitchen_categories, order_items, modifier_groups, modif
 - Areas CRUD: `/dashboard/zash-dine/areas` (`zash.dine.manage`)
 - Tables CRUD: `/dashboard/zash-dine/tables` (`zash.dine.manage`)
 - Kitchens CRUD: `/dashboard/zash-dine/kitchens` (`zash.dine.manage`; assign product categories; one kitchen per category)
-- Floor view: `/dashboard/zash-dine/floor` (`zash.dine.waiter` **or** `zash.dine.manage`; polls `/api/zash-dine/floor` every 5 seconds; waiters can cancel a meal / add a note)
-- Kitchen screen: `/dashboard/zash-dine/kitchen` (`zash.dine.chef` **or** `zash.dine.manage`; polls `/api/zash-dine/kitchen/tickets` every 5 seconds; preparing/ready/rejected actions)
+- Floor view: `/dashboard/zash-dine/floor` (`zash.dine.waiter` **or** `zash.dine.manage`; live updates on private `zash-dine.floor` when Reverb/Echo is available; polls `/api/zash-dine/floor` every 5 seconds as fallback; waiters can cancel a meal / add a note; ready-meal snackbars for `Order.author_id`)
+- Kitchen screen: `/dashboard/zash-dine/kitchen` (`zash.dine.chef` **or** `zash.dine.manage`; live updates on private `zash-dine.kitchen` when Reverb/Echo is available; polls `/api/zash-dine/kitchen/tickets` every 5 seconds as fallback; preparing/ready/rejected actions)
 - Settings: existing ZashDine settings page
 
 ## POS dine-in
@@ -37,7 +37,15 @@ areas, tables, kitchens, kitchen_categories, order_items, modifier_groups, modif
 - `GET /api/zash-dine/kitchen/tickets?kitchen_id=` — chef/manage; optional filter `all` / kitchen id / `unassigned`
 - `POST /api/zash-dine/order-items/{id}/kitchen-status` body `{ "status": "preparing"|"ready"|"rejected" }` — transitions under `lockForUpdate` inside a transaction. Rejection does **not** remove charges or return stock.
 - Status machine: `pending → preparing → ready`, or `pending|preparing → rejected`. Ready/rejected are terminal for kitchen actions.
-- Polling only in 3a (no Reverb / waiter-ready notifications yet)
+- Polling remains the authoritative fallback; Phase 3b adds Reverb private-channel push after successful commit
+
+## Realtime (Phase 3b)
+- Private channels (server-authorized): `zash-dine.kitchen` (chef/manage), `zash-dine.floor` (waiter/manage); `App.User.{id}` is owner-only
+- Board event: `zash-dine.board-updated` (`ZashDineBoardUpdated`, after commit). Clients refresh from the API; duplicate `event_id`s are ignored; reconnect triggers a refresh; Kitchen/Floor wait for Echo init (before or after `DOMContentLoaded`) and clear wait/retry handlers on unmount
+- Ready alert recipient rule: **`Order.author_id`** (responsible waiter / order owner). `OrderItem.author_id` is ignored for alerts. After a successful kitchen commit, emits durable notification + `zash-dine.meal-ready` on `App.User.{author_id}` (notification create is also deferred until commit; core notification broadcast events are after-commit)
+- Floor cleanup removes only the meal-ready listener (`stopListening`); it does not leave `App.User.*`, so the dashboard notification subscriber keeps working
+- Requires `BROADCAST_DRIVER=reverb` (and Reverb env) for WebSocket delivery; without it, 5s polling still works. A Reverb outage after commit is logged and does not turn a valid kitchen status write into an HTTP error; durable ready notifications still persist when NotificationCreatedEvent cannot publish
+- Playwright: `e2e/specs/realtime-reverb.spec.ts` (set `E2E_REVERB=1` with Reverb on the e2e host/port for the live WebSocket proof; browser polling-fallback coverage is a separate case that forces Echo unavailable in-page). PHPUnit covers unavailable-Reverb broadcaster failure on the ready path separately from that browser case
 
 ## Scope by phase
 - Phase 1: skeleton, permissions, migrations, menu, settings page, smoke test
@@ -45,7 +53,7 @@ areas, tables, kitchens, kitchen_categories, order_items, modifier_groups, modif
 - Phase 2b: dine-in POS order type, table lock/occupy/free, waiter cancel/note actions
 - Phase 2c: Vue table picker + Floor note/cancel popups (core `Popup.show`)
 - Phase 3a: category to kitchen routing, kitchen screen (preparing/ready/rejected), polling
-- Phase 3b: Reverb live updates + waiter-ready notifications
+- Phase 3b: Reverb live updates + waiter-ready notifications (polling fallback retained)
 - Phase 4: modifier groups and modifiers with stock
 - Phase 5: manual QA, packaging as an installable zip
 

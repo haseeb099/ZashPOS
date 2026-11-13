@@ -3,27 +3,15 @@
 namespace App\Broadcasting;
 
 use App\Models\User;
-use Illuminate\Support\Facades\Auth;
 
 class PrivateChannel
 {
     /**
-     * Create a new channel instance.
-     *
-     * @return void
+     * Authenticate the user's access to App.User.{id}.
+     * The authenticated user may only join their own channel.
      */
-    public function __construct()
+    public function join( User $user, int|string $id ): bool
     {
-        //
-    }
-
-    /**
-     * Authenticate the user's access to the channel.
-     *
-     * @return array|bool
-     */
-    public function join( User $user )
-    {
-        return (int) $user->id === (int) Auth::id();
+        return (int) $user->id === (int) $id;
     }
 }
