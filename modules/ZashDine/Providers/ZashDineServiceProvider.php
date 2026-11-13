@@ -4,6 +4,8 @@ namespace Modules\ZashDine\Providers;
 
 use App\Classes\AsideMenu;
 use App\Classes\Hook;
+use App\Models\User;
+use Illuminate\Support\Facades\Broadcast;
 use Illuminate\Support\ServiceProvider;
 use Modules\ZashDine\Crud\AreaCrud;
 use Modules\ZashDine\Crud\DiningTableCrud;
@@ -93,6 +95,12 @@ class ZashDineServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
-        //
+        Broadcast::channel( 'zash-dine.kitchen', function ( User $user ) {
+            return $user->allowedTo( ['zash.dine.chef', 'zash.dine.manage'] );
+        } );
+
+        Broadcast::channel( 'zash-dine.floor', function ( User $user ) {
+            return $user->allowedTo( ['zash.dine.waiter', 'zash.dine.manage'] );
+        } );
     }
 }

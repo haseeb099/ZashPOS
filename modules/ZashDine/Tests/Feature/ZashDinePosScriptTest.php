@@ -58,6 +58,10 @@ final class ZashDinePosScriptTest extends TestCase
         $this->assertStringContainsString( 'Popup.show', $html );
         $this->assertStringNotContainsString( 'window.prompt', $html );
         $this->assertStringNotContainsString( 'window.confirm', $html );
+        $this->assertStringContainsString( 'Echo.private', $html );
+        $this->assertStringContainsString( '.zash-dine.meal-ready', $html );
+        $this->assertStringContainsString( 'rememberEventId', $html );
+        $this->assertStringContainsString( 'Echo.leave', $html );
     }
 
     public function test_kitchen_script_registers_dashboard_component_with_status_helpers(): void
@@ -69,6 +73,10 @@ final class ZashDinePosScriptTest extends TestCase
         $this->assertStringContainsString( 'statusLabel( status )', $html );
         $this->assertStringContainsString( '/api/zash-dine/kitchen/tickets', $html );
         $this->assertStringContainsString( 'setInterval', $html );
+        $this->assertStringContainsString( 'Echo.private', $html );
+        $this->assertStringContainsString( '.zash-dine.board-updated', $html );
+        $this->assertStringContainsString( 'rememberEventId', $html );
+        $this->assertStringContainsString( 'Echo.leave', $html );
     }
 
     private function ensureZashDineViewsRegistered(): void

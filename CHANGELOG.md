@@ -5,6 +5,7 @@ Tracks ZashPOS changes only, in Keep a Changelog style. Upstream NexoPOS notes s
 ## [Unreleased]
 
 ### Added
+- ZashDine Phase 3b: Reverb private-channel live updates for Kitchen (`zash-dine.kitchen`) and Floor (`zash-dine.floor`) with after-commit board events, reconnect refresh, client-side duplicate-event dedupe, and listener cleanup. 5s polling remains the fallback when Reverb is unavailable. Ready meals alert `Order.author_id` (durable notification + `zash-dine.meal-ready` on `App.User.{id}`).
 - ZashDine Phase 3a: manager Kitchens CRUD with exclusive category routing, chef Kitchen screen (5s polling, filter including Unassigned), dine-in meal routing on order save/update without duplicating existing kitchen rows, preparing/ready/rejected transitions with permissions and locking, rejection that keeps charges, and cancel-after-preparing restricted to managers.
 - ZashDine Phase 2c: Vue popups via core `Popup.show` for the POS dine-in table picker (tables grouped by area) and Floor meal note / cancel-meal confirmation. Native `window.prompt` / `window.confirm` are removed for those flows.
 - ZashDine Phase 2c follow-up: table-picker race notice survives availability refresh (selection cleared until a free table is chosen again), popup shells stay within the viewport on tablet sizes, and Playwright covers empty/retry/race/dismiss/note-cancel error paths.

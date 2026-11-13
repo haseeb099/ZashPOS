@@ -17,6 +17,11 @@ use Modules\ZashDine\Models\OrderItem;
 
 class KitchenService
 {
+    public function __construct( protected ZashDineRealtimeService $realtimeService )
+    {
+        //
+    }
+
     /**
      * Allowed kitchen status transitions.
      *
@@ -282,12 +287,27 @@ class KitchenService
             $locked->status = $toStatus;
             $locked->save();
 
-            return $locked->fresh( [
+            $fresh = $locked->fresh( [
                 'orderProduct:id,name,quantity',
                 'table:id,name',
                 'kitchen:id,name',
-                'order:id,code,payment_status',
+                'order:id,code,payment_status,author_id',
             ] );
+
+            /**
+             * Events implement ShouldDispatchAfterCommit so clients never see
+             * a status change that later rolls back with the transaction.
+             */
+            $this->realtimeService->publishBoardUpdate(
+                ZashDineRealtimeService::REASON_KITCHEN_STATUS,
+                $fresh
+            );
+
+            if ( $fresh instanceof OrderItem && $fresh->status === OrderItem::STATUS_READY ) {
+                $this->realtimeService->notifyMealReady( $fresh );
+            }
+
+            return $fresh;
         } );
     }
 }

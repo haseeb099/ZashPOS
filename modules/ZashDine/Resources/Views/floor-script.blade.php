@@ -37,13 +37,28 @@
         save: @json( __m( 'Save note', 'ZashDine' ) ),
         saving: @json( __m( 'Saving…', 'ZashDine' ) ),
         cancelling: @json( __m( 'Cancelling…', 'ZashDine' ) ),
+        live: @json( __m( 'Live', 'ZashDine' ) ),
+        polling: @json( __m( 'Polling', 'ZashDine' ) ),
     };
+
+    const BOARD_CHANNEL = 'zash-dine.floor';
+    const BOARD_EVENT = '.zash-dine.board-updated';
+    const READY_EVENT = '.zash-dine.meal-ready';
+    const SEEN_LIMIT = 100;
 
     const mealLabel = ( item ) => {
         const quantity = item.quantity || 1;
         const name = item.name || ( '#' + item.id );
 
         return `${quantity} × ${name}`;
+    };
+
+    const currentUserId = () => {
+        try {
+            return Number( ns?.user?.attributes?.user_id || ns?.user?.id || 0 );
+        } catch ( error ) {
+            return 0;
+        }
     };
 
     nsExtraComponents['zash-dine-floor'] = {
@@ -54,19 +69,134 @@
                 loading: true,
                 error: null,
                 timer: null,
+                echoBound: false,
+                liveConnected: false,
+                seenEventIds: [],
+                connectionHandler: null,
+                userChannelName: null,
                 labels,
             };
+        },
+        computed: {
+            connectionLabel() {
+                return this.liveConnected ? labels.live : labels.polling;
+            },
         },
         mounted() {
             this.loadFloor();
             this.timer = setInterval( () => this.loadFloor( false ), 5000 );
+            this.bindEcho();
         },
         beforeUnmount() {
+            this.unbindEcho();
+
             if ( this.timer ) {
                 clearInterval( this.timer );
+                this.timer = null;
             }
         },
         methods: {
+            rememberEventId( eventId ) {
+                if ( ! eventId ) {
+                    return false;
+                }
+
+                if ( this.seenEventIds.includes( eventId ) ) {
+                    return true;
+                }
+
+                this.seenEventIds.push( eventId );
+
+                if ( this.seenEventIds.length > SEEN_LIMIT ) {
+                    this.seenEventIds.splice( 0, this.seenEventIds.length - SEEN_LIMIT );
+                }
+
+                return false;
+            },
+            onBoardUpdated( payload ) {
+                if ( this.rememberEventId( payload?.event_id ) ) {
+                    return;
+                }
+
+                this.loadFloor( false );
+            },
+            onMealReady( payload ) {
+                if ( this.rememberEventId( payload?.event_id ) ) {
+                    return;
+                }
+
+                const message = payload?.description || payload?.title;
+
+                if ( message && typeof nsSnackBar !== 'undefined' ) {
+                    nsSnackBar.success( message );
+                }
+
+                this.loadFloor( false );
+            },
+            bindEcho() {
+                if ( typeof Echo === 'undefined' || this.echoBound ) {
+                    return;
+                }
+
+                try {
+                    Echo.private( BOARD_CHANNEL ).listen( BOARD_EVENT, ( payload ) => {
+                        this.onBoardUpdated( payload );
+                    } );
+
+                    const userId = currentUserId();
+
+                    if ( userId > 0 ) {
+                        this.userChannelName = `App.User.${userId}`;
+                        Echo.private( this.userChannelName ).listen( READY_EVENT, ( payload ) => {
+                            this.onMealReady( payload );
+                        } );
+                    }
+
+                    this.echoBound = true;
+
+                    const pusher = Echo.connector?.pusher;
+
+                    if ( pusher?.connection ) {
+                        this.connectionHandler = ( states ) => {
+                            const current = states?.current || pusher.connection.state;
+                            this.liveConnected = current === 'connected';
+
+                            if ( current === 'connected' ) {
+                                this.loadFloor( false );
+                            }
+                        };
+                        pusher.connection.bind( 'state_change', this.connectionHandler );
+                        this.liveConnected = pusher.connection.state === 'connected';
+                    }
+                } catch ( error ) {
+                    this.echoBound = false;
+                    this.liveConnected = false;
+                }
+            },
+            unbindEcho() {
+                try {
+                    const pusher = typeof Echo !== 'undefined' ? Echo.connector?.pusher : null;
+
+                    if ( pusher?.connection && this.connectionHandler ) {
+                        pusher.connection.unbind( 'state_change', this.connectionHandler );
+                    }
+
+                    if ( typeof Echo !== 'undefined' ) {
+                        Echo.leave( BOARD_CHANNEL );
+
+                        if ( this.userChannelName ) {
+                            Echo.leave( this.userChannelName );
+                        }
+                    }
+                } catch ( error ) {
+                    // Ignore cleanup errors when Echo was never connected.
+                }
+
+                this.echoBound = false;
+                this.liveConnected = false;
+                this.connectionHandler = null;
+                this.userChannelName = null;
+            },
             loadFloor( showLoading = true ) {
                 if ( showLoading ) {
                     this.loading = true;
@@ -146,11 +276,14 @@
             },
         },
         template: `
-            <div class="space-y-6">
+            <div class="space-y-6" data-zash-dine-realtime="floor">
                 <div class="flex items-center justify-between gap-3 flex-wrap">
-                    <p class="text-xs text-fontcolor-soft" v-if="refreshedAt">
-                        @{{ labels.lastRefresh }}: @{{ refreshedAt }}
-                    </p>
+                    <div class="flex items-center gap-3 text-xs text-fontcolor-soft">
+                        <p v-if="refreshedAt">
+                            @{{ labels.lastRefresh }}: @{{ refreshedAt }}
+                        </p>
+                        <span class="px-2 py-1 rounded border border-box-edge" data-zash-dine-connection>@{{ connectionLabel }}</span>
+                    </div>
                     <button type="button" class="rounded px-3 py-1 text-sm bg-info-tertiary text-info-primary" v-on:click="loadFloor()">
                         @{{ labels.refreshNow }}
                     </button>

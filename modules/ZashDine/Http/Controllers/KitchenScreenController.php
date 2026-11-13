@@ -20,7 +20,7 @@ class KitchenScreenController extends DashboardController
     {
         return View::make( 'ZashDine::kitchen', [
             'title' => __m( 'Kitchen', 'ZashDine' ),
-            'description' => __m( 'Incoming meals by kitchen. Refreshes every 5 seconds.', 'ZashDine' ),
+            'description' => __m( 'Incoming meals by kitchen. Live updates when Reverb is connected; polls every 5 seconds as fallback.', 'ZashDine' ),
         ] );
     }
 

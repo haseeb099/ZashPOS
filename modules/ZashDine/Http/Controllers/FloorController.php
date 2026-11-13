@@ -14,7 +14,7 @@ class FloorController extends DashboardController
     {
         return View::make( 'ZashDine::floor', [
             'title' => __m( 'Floor', 'ZashDine' ),
-            'description' => __m( 'Live table status by area. Refreshes every 5 seconds.', 'ZashDine' ),
+            'description' => __m( 'Live table status by area. Live updates when Reverb is connected; polls every 5 seconds as fallback.', 'ZashDine' ),
         ] );
     }
 

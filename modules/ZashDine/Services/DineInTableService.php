@@ -26,6 +26,7 @@ class DineInTableService
         protected OrdersService $ordersService,
         protected ProductService $productService,
         protected KitchenService $kitchenService,
+        protected ZashDineRealtimeService $realtimeService,
     ) {
         //
     }
@@ -118,6 +119,11 @@ class DineInTableService
 
             if ( $this->shouldReleaseTable( $order->payment_status ) ) {
                 $this->releaseTableForOrder( $order );
+            } else {
+                $this->realtimeService->publishBoardUpdate(
+                    ZashDineRealtimeService::REASON_ORDER_SYNC,
+                    orderId: (int) $order->id
+                );
             }
 
             return;
@@ -148,6 +154,11 @@ class DineInTableService
 
         if ( $this->shouldReleaseTable( $order->payment_status ) ) {
             $this->releaseTableForOrder( $order );
+        } else {
+            $this->realtimeService->publishBoardUpdate(
+                ZashDineRealtimeService::REASON_ORDER_SYNC,
+                orderId: (int) $order->id
+            );
         }
     }
 
@@ -173,6 +184,10 @@ class DineInTableService
          * subsequent created re-entry reloads from DB via assignOrderToTable.
          */
         $this->syncOrderItems( $order, $table, preferPersistedProducts: false );
+        $this->realtimeService->publishBoardUpdate(
+            ZashDineRealtimeService::REASON_ORDER_SYNC,
+            orderId: (int) $order->id
+        );
     }
 
     /**
@@ -193,19 +208,34 @@ class DineInTableService
             return;
         }
 
+        $cancelledAny = false;
+
         OrderItem::query()
             ->where( 'order_id', $order->id )
             ->where( 'status', '!=', OrderItem::STATUS_CANCELLED )
             ->get()
-            ->each( function ( OrderItem $item ) {
+            ->each( function ( OrderItem $item ) use ( &$cancelledAny ) {
                 $item->status = OrderItem::STATUS_CANCELLED;
                 $item->save();
+                $cancelledAny = true;
             } );
 
-        $this->releaseTableForOrder( $order );
+        $released = DiningTable::query()
+            ->where( 'current_order_id', $order->id )
+            ->update( [
+                'current_order_id' => null,
+                'status' => DiningTable::STATUS_AVAILABLE,
+            ] );
+
+        if ( $cancelledAny || $released > 0 ) {
+            $this->realtimeService->publishBoardUpdate(
+                ZashDineRealtimeService::REASON_ABANDON_DINE_IN,
+                orderId: (int) $order->id
+            );
+        }
     }
 
-    public function releaseTableForOrder( object|int $order ): void
+    public function releaseTableForOrder( object|int $order, string $reason = ZashDineRealtimeService::REASON_TABLE_RELEASED ): void
     {
         $orderId = is_object( $order ) ? ( $order->id ?? null ) : $order;
 
@@ -213,12 +243,16 @@ class DineInTableService
             return;
         }
 
-        DiningTable::query()
+        $released = DiningTable::query()
             ->where( 'current_order_id', $orderId )
             ->update( [
                 'current_order_id' => null,
                 'status' => DiningTable::STATUS_AVAILABLE,
             ] );
+
+        if ( $released > 0 ) {
+            $this->realtimeService->publishBoardUpdate( $reason, orderId: (int) $orderId );
+        }
     }
 
     public function shouldReleaseTable( ?string $paymentStatus ): bool
@@ -638,7 +672,14 @@ class DineInTableService
             $lockedItem->status = OrderItem::STATUS_CANCELLED;
             $lockedItem->save();
 
-            return $lockedItem->fresh();
+            $fresh = $lockedItem->fresh();
+
+            $this->realtimeService->publishBoardUpdate(
+                ZashDineRealtimeService::REASON_MEAL_CANCELLED,
+                $fresh
+            );
+
+            return $fresh;
         } );
     }
 
@@ -681,6 +722,11 @@ class DineInTableService
 
         $orderItem->note = $note;
         $orderItem->save();
+
+        $this->realtimeService->publishBoardUpdate(
+            ZashDineRealtimeService::REASON_MEAL_NOTE,
+            $orderItem
+        );
 
         return $orderItem;
     }

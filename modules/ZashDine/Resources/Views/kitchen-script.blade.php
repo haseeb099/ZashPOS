@@ -25,7 +25,13 @@
         rejected: @json( __m( 'Rejected', 'ZashDine' ) ),
         rejectKeepsBill: @json( __m( 'Rejection keeps the meal on the bill. Use Floor cancel to remove charges.', 'ZashDine' ) ),
         updating: @json( __m( 'Updating…', 'ZashDine' ) ),
+        live: @json( __m( 'Live', 'ZashDine' ) ),
+        polling: @json( __m( 'Polling', 'ZashDine' ) ),
     };
+
+    const CHANNEL = 'zash-dine.kitchen';
+    const EVENT = '.zash-dine.board-updated';
+    const SEEN_LIMIT = 100;
 
     nsExtraComponents['zash-dine-kitchen'] = {
         data() {
@@ -38,6 +44,11 @@
                 refreshedAt: null,
                 busyId: null,
                 timer: null,
+                echoChannel: null,
+                echoBound: false,
+                liveConnected: false,
+                seenEventIds: [],
+                connectionHandler: null,
                 labels,
             };
         },
@@ -53,19 +64,100 @@
 
                 return this.tickets.filter( ( ticket ) => Number( ticket.kitchen_id ) === Number( this.filter ) );
             },
+            connectionLabel() {
+                return this.liveConnected ? labels.live : labels.polling;
+            },
         },
         mounted() {
             this.refresh();
             this.timer = window.setInterval( () => this.refresh( true ), 5000 );
+            this.bindEcho();
         },
         beforeUnmount() {
+            this.unbindEcho();
+
             if ( this.timer ) {
                 window.clearInterval( this.timer );
+                this.timer = null;
             }
         },
         methods: {
             statusLabel( status ) {
                 return labels[status] || status;
+            },
+            rememberEventId( eventId ) {
+                if ( ! eventId ) {
+                    return false;
+                }
+
+                if ( this.seenEventIds.includes( eventId ) ) {
+                    return true;
+                }
+
+                this.seenEventIds.push( eventId );
+
+                if ( this.seenEventIds.length > SEEN_LIMIT ) {
+                    this.seenEventIds.splice( 0, this.seenEventIds.length - SEEN_LIMIT );
+                }
+
+                return false;
+            },
+            onBoardUpdated( payload ) {
+                if ( this.rememberEventId( payload?.event_id ) ) {
+                    return;
+                }
+
+                this.refresh( true );
+            },
+            bindEcho() {
+                if ( typeof Echo === 'undefined' || this.echoBound ) {
+                    return;
+                }
+
+                try {
+                    this.echoChannel = Echo.private( CHANNEL ).listen( EVENT, ( payload ) => {
+                        this.onBoardUpdated( payload );
+                    } );
+                    this.echoBound = true;
+
+                    const pusher = Echo.connector?.pusher;
+
+                    if ( pusher?.connection ) {
+                        this.connectionHandler = ( states ) => {
+                            const current = states?.current || pusher.connection.state;
+                            this.liveConnected = current === 'connected';
+
+                            if ( current === 'connected' ) {
+                                this.refresh( true );
+                            }
+                        };
+                        pusher.connection.bind( 'state_change', this.connectionHandler );
+                        this.liveConnected = pusher.connection.state === 'connected';
+                    }
+                } catch ( error ) {
+                    this.echoBound = false;
+                    this.liveConnected = false;
+                }
+            },
+            unbindEcho() {
+                try {
+                    const pusher = typeof Echo !== 'undefined' ? Echo.connector?.pusher : null;
+
+                    if ( pusher?.connection && this.connectionHandler ) {
+                        pusher.connection.unbind( 'state_change', this.connectionHandler );
+                    }
+
+                    if ( typeof Echo !== 'undefined' ) {
+                        Echo.leave( CHANNEL );
+                    }
+                } catch ( error ) {
+                    // Ignore cleanup errors when Echo was never connected.
+                }
+
+                this.echoChannel = null;
+                this.echoBound = false;
+                this.liveConnected = false;
+                this.connectionHandler = null;
             },
             refresh( silent = false ) {
                 if ( ! silent ) {
@@ -124,7 +216,7 @@
             },
         },
         template: `
-            <div class="space-y-4" data-zash-dine-kitchen-screen>
+            <div class="space-y-4" data-zash-dine-kitchen-screen data-zash-dine-realtime="kitchen">
                 <div class="flex flex-wrap items-center justify-between gap-3">
                     <div class="flex flex-wrap items-center gap-2">
                         <label class="text-sm text-fontcolor-soft" for="zash-dine-kitchen-filter">@{{ labels.filter }}</label>
@@ -133,6 +225,7 @@
                             <option value="unassigned">@{{ labels.unassigned }}</option>
                             <option v-for="kitchen in kitchens" :key="kitchen.id" :value="String(kitchen.id)">@{{ kitchen.name }}</option>
                         </select>
+                        <span class="text-xs px-2 py-1 rounded border border-box-edge" data-zash-dine-connection>@{{ connectionLabel }}</span>
                     </div>
                     <div class="flex items-center gap-3 text-sm text-fontcolor-soft">
                         <span v-if="refreshedAt">@{{ labels.lastRefresh }}: @{{ refreshedAt }}</span>

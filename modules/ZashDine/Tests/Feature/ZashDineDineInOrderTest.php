@@ -406,7 +406,8 @@ final class ZashDineDineInOrderTest extends TestCase
         $service = new DineInTableService(
             app( OrdersService::class ),
             $productService,
-            app( \Modules\ZashDine\Services\KitchenService::class )
+            app( \Modules\ZashDine\Services\KitchenService::class ),
+            app( \Modules\ZashDine\Services\ZashDineRealtimeService::class )
         );
 
         $thrown = null;
