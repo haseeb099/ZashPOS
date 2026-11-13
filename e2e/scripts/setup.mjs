@@ -72,13 +72,24 @@ function ensureLaravelEnv() {
     }
 
     let contents = fs.readFileSync(envFile, 'utf8');
+    const baseUrl = process.env.E2E_BASE_URL || 'http://127.0.0.1:8004';
+    let hostPort = '127.0.0.1:8004';
+
+    try {
+        hostPort = new URL(baseUrl).host;
+    } catch {
+        // Keep the Phase 4 default host:port.
+    }
+
     contents = upsertEnv(contents, 'DB_CONNECTION', 'sqlite');
     contents = upsertEnv(contents, 'DB_DATABASE', 'database/e2e.sqlite');
-    contents = upsertEnv(contents, 'APP_URL', 'http://127.0.0.1:8001');
-    contents = upsertEnv(contents, 'SESSION_COOKIE', 'zashpos_e2e');
-    contents = upsertEnv(contents, 'CACHE_PREFIX', 'zashpos_e2e');
+    contents = upsertEnv(contents, 'APP_URL', baseUrl);
+    contents = upsertEnv(contents, 'SESSION_COOKIE', process.env.E2E_SESSION_COOKIE || 'zashpos_e2e_p4');
+    contents = upsertEnv(contents, 'CACHE_PREFIX', process.env.E2E_CACHE_PREFIX || 'zashpos_e2e_p4');
     contents = upsertEnv(contents, 'MAIL_MAILER', 'log');
-    contents = upsertEnv(contents, 'SANCTUM_STATEFUL_DOMAINS', '127.0.0.1:8001,localhost,127.0.0.1');
+    contents = upsertEnv(contents, 'SANCTUM_STATEFUL_DOMAINS', `${hostPort},localhost,127.0.0.1`);
+    // Product/category generation must not require a live Reverb process.
+    contents = upsertEnv(contents, 'BROADCAST_DRIVER', 'log');
     fs.writeFileSync(envFile, contents);
 }
 
@@ -125,6 +136,8 @@ for (const suffix of ['', '-journal', '-wal', '-shm']) {
         fs.unlinkSync(file);
     }
 }
+
+fs.writeFileSync(sqlitePath, '');
 
 artisanOrFail([
     'ns:setup',

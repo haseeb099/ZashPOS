@@ -1849,7 +1849,8 @@ export class POS {
                     product.product_id === cartProduct.product_id &&
                     product.tax_group_id === cartProduct.tax_group_id &&
                     product.unit_id === cartProduct.unit_id &&
-                    product.unit_quantity_id === cartProduct.unit_quantity_id
+                    product.unit_quantity_id === cartProduct.unit_quantity_id &&
+                    nsHooks.applyFilters( 'ns-pos-cart-products-mergeable', true, product, cartProduct )
                 );
             });
 

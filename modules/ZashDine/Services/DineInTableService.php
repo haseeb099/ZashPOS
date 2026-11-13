@@ -27,6 +27,7 @@ class DineInTableService
         protected ProductService $productService,
         protected KitchenService $kitchenService,
         protected ZashDineRealtimeService $realtimeService,
+        protected ModifierService $modifierService,
     ) {
         //
     }
@@ -372,6 +373,16 @@ class DineInTableService
 
             if (
                 $existingProduct instanceof OrderProduct
+                && $this->modifierService->modifierFingerprintChanged( $existingProduct, $incomingProduct )
+                && ! ns()->allowedTo( 'zash.dine.manage' )
+            ) {
+                throw new NotAllowedException(
+                    __m( 'Only a manager can change modifiers after kitchen preparation has started.', 'ZashDine' )
+                );
+            }
+
+            if (
+                $existingProduct instanceof OrderProduct
                 && $this->protectedMealIdentityChanged( $existingProduct, $incomingProduct )
             ) {
                 $this->assertCancelAllowedForKitchenStatus( $item );
@@ -419,6 +430,10 @@ class DineInTableService
      */
     protected function protectedMealIdentityChanged( OrderProduct $existing, array $incoming ): bool
     {
+        if ( $this->modifierService->modifierFingerprintChanged( $existing, $incoming ) ) {
+            return true;
+        }
+
         $existingProductId = (int) ( $existing->product_id ?? 0 );
         $incomingMode = (string) ( $incoming['mode'] ?? 'normal' );
         $resolvedProduct = $this->resolveIncomingCatalogProduct( $incoming );

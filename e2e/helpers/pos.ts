@@ -27,7 +27,9 @@ export async function openPos(page: Page): Promise<void> {
     }), { timeout: 15000 }).toBe(true);
 }
 
-export async function addProduct(page: Page, productName: string): Promise<void> {
+export async function addProduct(page: Page, productName: string, options?: {
+    modifierName?: string;
+}): Promise<void> {
     const grid = page.locator('#grid-items');
     const product = grid.getByRole('heading', { name: productName, exact: true });
 
@@ -69,6 +71,15 @@ export async function addProduct(page: Page, productName: string): Promise<void>
 
     await quantityPopup.getByText('Enter', { exact: true }).click();
     await expect(quantityPopup).toBeHidden({ timeout: 15000 });
+
+    if (options?.modifierName) {
+        const modifierPopup = page.locator('#zash-dine-modifier-popup');
+        await expect(modifierPopup).toBeVisible({ timeout: 15000 });
+        await modifierPopup.getByRole('button', { name: new RegExp(options.modifierName, 'i') }).click();
+        await modifierPopup.getByRole('button', { name: /Add to cart/i }).click();
+        await expect(modifierPopup).toBeHidden({ timeout: 15000 });
+    }
+
     await expect(page.locator('#cart-products-table')).toContainText(productName);
 }
 

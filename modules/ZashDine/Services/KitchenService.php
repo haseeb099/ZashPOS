@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\DB;
 use Modules\ZashDine\Models\Kitchen;
 use Modules\ZashDine\Models\KitchenCategory;
 use Modules\ZashDine\Models\OrderItem;
+use Modules\ZashDine\Models\OrderProductModifier;
 
 class KitchenService
 {
@@ -207,7 +208,16 @@ class KitchenService
             $query->whereNotNull( 'kitchen_id' );
         }
 
-        $tickets = $query->get()->map( function ( OrderItem $item ) {
+        $items = $query->get();
+        $modifiers = OrderProductModifier::query()
+            ->whereIn( 'order_product_id', $items->pluck( 'order_product_id' )->filter()->all() )
+            ->orderBy( 'id' )
+            ->get()
+            ->groupBy( 'order_product_id' );
+
+        $tickets = $items->map( function ( OrderItem $item ) use ( $modifiers ) {
+            $lines = $modifiers->get( $item->order_product_id, collect() );
+
             return [
                 'id' => $item->id,
                 'status' => $item->status,
@@ -221,6 +231,13 @@ class KitchenService
                 'order_code' => $item->order?->code,
                 'name' => $item->orderProduct?->name,
                 'quantity' => $item->orderProduct?->quantity,
+                'modifiers' => $lines->map( fn ( OrderProductModifier $line ) => [
+                    'id' => $line->id,
+                    'modifier_id' => (int) $line->modifier_id,
+                    'name' => $line->name,
+                    'quantity' => (float) $line->quantity,
+                    'price' => (float) $line->price,
+                ] )->values()->all(),
                 'allowed_transitions' => self::TRANSITIONS[$item->status] ?? [],
             ];
         } )->values()->all();
