@@ -44,8 +44,8 @@ areas, tables, kitchens, kitchen_categories, order_items, modifier_groups, modif
 - Board event: `zash-dine.board-updated` (`ZashDineBoardUpdated`, after commit). Clients refresh from the API; duplicate `event_id`s are ignored; reconnect triggers a refresh; Kitchen/Floor wait for Echo init (before or after `DOMContentLoaded`) and clear wait/retry handlers on unmount
 - Ready alert recipient rule: **`Order.author_id`** (responsible waiter / order owner). `OrderItem.author_id` is ignored for alerts. After a successful kitchen commit, emits durable notification + `zash-dine.meal-ready` on `App.User.{author_id}` (notification create is also deferred until commit; core notification broadcast events are after-commit)
 - Floor cleanup removes only the meal-ready listener (`stopListening`); it does not leave `App.User.*`, so the dashboard notification subscriber keeps working
-- Requires `BROADCAST_DRIVER=reverb` (and Reverb env) for WebSocket delivery; without it, 5s polling still works. A Reverb outage after commit is logged and does not turn a valid kitchen status write into an HTTP error
-- Playwright: `e2e/specs/realtime-reverb.spec.ts` (set `E2E_REVERB=1` with Reverb on the e2e host/port for the live WebSocket proof; polling fallback coverage runs without it)
+- Requires `BROADCAST_DRIVER=reverb` (and Reverb env) for WebSocket delivery; without it, 5s polling still works. A Reverb outage after commit is logged and does not turn a valid kitchen status write into an HTTP error; durable ready notifications still persist when NotificationCreatedEvent cannot publish
+- Playwright: `e2e/specs/realtime-reverb.spec.ts` (set `E2E_REVERB=1` with Reverb on the e2e host/port for the live WebSocket proof; browser polling-fallback coverage is a separate case that forces Echo unavailable in-page). PHPUnit covers unavailable-Reverb broadcaster failure on the ready path separately from that browser case
 
 ## Scope by phase
 - Phase 1: skeleton, permissions, migrations, menu, settings page, smoke test

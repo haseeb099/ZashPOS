@@ -334,12 +334,23 @@ test.describe('ZashDine Reverb realtime', () => {
                 expect(await authChannel(waiterPage, `private-App.User.${waiterId}`)).toBe(200);
             }
 
-            // Duplicate event_id handling: second identical payload must not force another API refresh
+            // Duplicate event_id: after prior ticket traffic settles, two identical
+            // payloads must trigger exactly one refresh.
+            await chefPage.waitForLoadState('networkidle');
             let ticketGets = 0;
+            let pendingTicketGets = 0;
             await chefPage.route('**/api/zash-dine/kitchen/tickets**', async (route) => {
                 ticketGets += 1;
-                await route.continue();
+                pendingTicketGets += 1;
+                try {
+                    await route.continue();
+                } finally {
+                    pendingTicketGets -= 1;
+                }
             });
+
+            await expect.poll(() => pendingTicketGets, { timeout: 10000 }).toBe(0);
+            ticketGets = 0;
 
             const dupId = `e2e-dup-${Date.now()}`;
             const emitted = await chefPage.evaluate((eventId) => {
@@ -363,8 +374,10 @@ test.describe('ZashDine Reverb realtime', () => {
                 return true;
             }, dupId);
             expect(emitted).toBeTruthy();
-            await chefPage.waitForTimeout(1500);
-            expect(ticketGets).toBeLessThanOrEqual(1);
+            await expect.poll(() => ticketGets, { timeout: 10000 }).toBe(1);
+            await expect.poll(() => pendingTicketGets, { timeout: 10000 }).toBe(0);
+            await chefPage.waitForTimeout(1000);
+            expect(ticketGets).toBe(1);
 
             // Reconnect refresh
             ticketGets = 0;
@@ -390,6 +403,8 @@ test.describe('ZashDine Reverb realtime', () => {
         }
     });
 
+    // Browser-only polling fallback (Echo forced unavailable in-page). Server-side
+    // Reverb outage + NotificationCreatedEvent coverage lives in ZashDineRealtimeTest.
     test('kitchen status still succeeds and boards keep polling when Reverb is unavailable', async ({ browser }) => {
         test.setTimeout(300000);
 

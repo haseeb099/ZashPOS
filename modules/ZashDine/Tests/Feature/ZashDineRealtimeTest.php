@@ -323,7 +323,7 @@ final class ZashDineRealtimeTest extends TestCase
             ->count() );
     }
 
-    public function test_kitchen_ready_http_succeeds_when_realtime_broadcast_throws(): void
+    public function test_kitchen_ready_http_succeeds_when_reverb_endpoint_unavailable(): void
     {
         $waiter = $this->createUserWithZashDinePermissions( [
             'zash.dine.waiter',
@@ -352,13 +352,27 @@ final class ZashDineRealtimeTest extends TestCase
             'status' => OrderItem::STATUS_PREPARING,
         ] )->assertOk();
 
-        $this->app->instance( ZashDineRealtimeService::class, new class extends ZashDineRealtimeService
-        {
-            protected function dispatchEvent( object $event ): void
-            {
-                throw new \RuntimeException( 'simulated reverb outage' );
-            }
-        } );
+        /**
+         * Point the Reverb broadcaster at an isolated closed port so board,
+         * meal-ready, and NotificationCreatedEvent publishes all fail at the
+         * broadcaster — without mocking RealtimeService.dispatchEvent.
+         */
+        config( [
+            'broadcasting.default' => 'reverb',
+            'broadcasting.connections.reverb.driver' => 'reverb',
+            'broadcasting.connections.reverb.key' => 'zash-test-key',
+            'broadcasting.connections.reverb.secret' => 'zash-test-secret',
+            'broadcasting.connections.reverb.app_id' => 'zash-test-app',
+            'broadcasting.connections.reverb.options.host' => '127.0.0.1',
+            'broadcasting.connections.reverb.options.port' => 19999,
+            'broadcasting.connections.reverb.options.scheme' => 'http',
+            'broadcasting.connections.reverb.options.useTLS' => false,
+            'broadcasting.connections.reverb.client_options.verify' => false,
+            'broadcasting.connections.reverb.client_options.timeout' => 1,
+            'broadcasting.connections.reverb.client_options.connect_timeout' => 1,
+        ] );
+        $this->app->forgetInstance( \Illuminate\Broadcasting\BroadcastManager::class );
+        $this->app->forgetInstance( 'Illuminate\Contracts\Broadcasting\Factory' );
 
         $this->json( 'POST', 'api/zash-dine/order-items/' . $item->id . '/kitchen-status', [
             'status' => OrderItem::STATUS_READY,
@@ -368,6 +382,7 @@ final class ZashDineRealtimeTest extends TestCase
         $this->assertDatabaseHas( 'nexopos_notifications', [
             'identifier' => 'zash-dine-meal-ready-' . $item->id,
             'user_id' => $waiter->id,
+            'source' => 'zash-dine',
         ] );
     }
 
