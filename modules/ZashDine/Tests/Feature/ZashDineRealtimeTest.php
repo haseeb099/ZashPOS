@@ -2,14 +2,16 @@
 
 namespace Modules\ZashDine\Tests\Feature;
 
-use App\Models\Notification;
 use App\Classes\ModuleRouting;
+use App\Events\NotificationCreatedEvent;
+use App\Models\Notification;
 use App\Models\Order;
 use App\Models\Product;
 use App\Models\Role;
 use App\Models\User;
 use App\Services\ModulesService;
 use App\Services\UsersService;
+use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Broadcast;
 use Illuminate\Support\Facades\Cache;
@@ -17,7 +19,6 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Str;
-use Illuminate\Broadcasting\PrivateChannel;
 use Modules\ZashDine\Events\ZashDineBoardUpdated;
 use Modules\ZashDine\Events\ZashDineMealReady;
 use Modules\ZashDine\Models\Area;
@@ -100,6 +101,45 @@ final class ZashDineRealtimeTest extends TestCase
             'channel_name' => 'private-zash-dine.floor',
             'socket_id' => '1234.5680',
         ] )->assertForbidden();
+    }
+
+    public function test_app_user_channel_requires_authenticated_owner(): void
+    {
+        config( [
+            'broadcasting.default' => 'pusher',
+            'broadcasting.connections.pusher.key' => 'zash-test-key',
+            'broadcasting.connections.pusher.secret' => 'zash-test-secret',
+            'broadcasting.connections.pusher.app_id' => 'zash-test-app',
+            'broadcasting.connections.pusher.options.cluster' => 'mt1',
+            'broadcasting.connections.pusher.options.useTLS' => false,
+        ] );
+
+        /**
+         * Switching the broadcast driver resolves a fresh broadcaster; re-bind
+         * the App.User channel the same way routes/channels.php does at boot.
+         */
+        Broadcast::channel( 'App.User.{id}', \App\Broadcasting\PrivateChannel::class );
+
+        $owner = $this->createUserWithZashDinePermissions( ['zash.dine.waiter', 'read.dashboard'] );
+        $other = $this->createUserWithZashDinePermissions( ['zash.dine.waiter', 'read.dashboard'] );
+
+        $authorizer = new \App\Broadcasting\PrivateChannel;
+        $this->assertTrue( $authorizer->join( $owner, $owner->id ) );
+        $this->assertTrue( $authorizer->join( $owner, (string) $owner->id ) );
+        $this->assertFalse( $authorizer->join( $owner, $other->id ) );
+
+        $this->actingAs( $owner );
+        $own = $this->postJson( '/broadcasting/auth', [
+            'channel_name' => 'private-App.User.' . $owner->id,
+            'socket_id' => '2222.1111',
+        ] );
+        $this->assertSame( 200, $own->status(), substr( (string) $own->getContent(), 0, 500 ) );
+
+        $foreign = $this->postJson( '/broadcasting/auth', [
+            'channel_name' => 'private-App.User.' . $other->id,
+            'socket_id' => '2222.2222',
+        ] );
+        $this->assertSame( 403, $foreign->status(), substr( (string) $foreign->getContent(), 0, 500 ) );
     }
 
     public function test_kitchen_ready_dispatches_board_and_waiter_alert_after_commit(): void
@@ -212,6 +252,125 @@ final class ZashDineRealtimeTest extends TestCase
         $this->assertSame( OrderItem::STATUS_PENDING, $item->fresh()->status );
     }
 
+    public function test_ready_transition_rollback_creates_no_notification_or_broadcast(): void
+    {
+        Event::fake( [
+            ZashDineBoardUpdated::class,
+            ZashDineMealReady::class,
+            NotificationCreatedEvent::class,
+        ] );
+
+        $waiter = $this->createUserWithZashDinePermissions( [
+            'zash.dine.waiter',
+            'read.dashboard',
+        ] );
+
+        [$product] = $this->prepareRoutedProduct();
+        [$table] = $this->createAvailableTable();
+
+        $this->attemptAuthenticate();
+        $responses = $this->processOrders( [
+            'type' => ['identifier' => DineInTableService::ORDER_TYPE],
+            DineInTableService::TABLE_FIELD => $table->id,
+            'products' => [$this->productLine( $product )],
+            'coupons' => [],
+            'payments' => [],
+        ] );
+        $order = $responses[0]['order-creation']['data']['order'];
+        Order::query()->whereKey( $order['id'] )->update( ['author_id' => $waiter->id] );
+
+        $item = OrderItem::query()->where( 'order_id', $order['id'] )->firstOrFail();
+        $chef = $this->createUserWithZashDinePermissions( ['zash.dine.chef'] );
+        $this->actingAs( $chef );
+
+        $this->json( 'POST', 'api/zash-dine/order-items/' . $item->id . '/kitchen-status', [
+            'status' => OrderItem::STATUS_PREPARING,
+        ] )->assertOk();
+
+        Event::fake( [
+            ZashDineBoardUpdated::class,
+            ZashDineMealReady::class,
+            NotificationCreatedEvent::class,
+        ] );
+
+        $this->app->instance( ZashDineRealtimeService::class, new class extends ZashDineRealtimeService
+        {
+            public function notifyMealReady( OrderItem $orderItem ): void
+            {
+                parent::notifyMealReady( $orderItem );
+
+                throw new \RuntimeException( 'forced rollback during ready transition' );
+            }
+        } );
+
+        try {
+            app( KitchenService::class )->transition(
+                $item->fresh(),
+                OrderItem::STATUS_READY
+            );
+            $this->fail( 'Expected rollback exception.' );
+        } catch ( \RuntimeException $exception ) {
+            $this->assertSame( 'forced rollback during ready transition', $exception->getMessage() );
+        }
+
+        Event::assertNotDispatched( ZashDineBoardUpdated::class );
+        Event::assertNotDispatched( ZashDineMealReady::class );
+        Event::assertNotDispatched( NotificationCreatedEvent::class );
+
+        $this->assertSame( OrderItem::STATUS_PREPARING, $item->fresh()->status );
+        $this->assertSame( 0, Notification::query()
+            ->where( 'identifier', 'zash-dine-meal-ready-' . $item->id )
+            ->count() );
+    }
+
+    public function test_kitchen_ready_http_succeeds_when_realtime_broadcast_throws(): void
+    {
+        $waiter = $this->createUserWithZashDinePermissions( [
+            'zash.dine.waiter',
+            'read.dashboard',
+        ] );
+
+        [$product] = $this->prepareRoutedProduct();
+        [$table] = $this->createAvailableTable();
+
+        $this->attemptAuthenticate();
+        $responses = $this->processOrders( [
+            'type' => ['identifier' => DineInTableService::ORDER_TYPE],
+            DineInTableService::TABLE_FIELD => $table->id,
+            'products' => [$this->productLine( $product )],
+            'coupons' => [],
+            'payments' => [],
+        ] );
+        $order = $responses[0]['order-creation']['data']['order'];
+        Order::query()->whereKey( $order['id'] )->update( ['author_id' => $waiter->id] );
+
+        $item = OrderItem::query()->where( 'order_id', $order['id'] )->firstOrFail();
+        $chef = $this->createUserWithZashDinePermissions( ['zash.dine.chef'] );
+        $this->actingAs( $chef );
+
+        $this->json( 'POST', 'api/zash-dine/order-items/' . $item->id . '/kitchen-status', [
+            'status' => OrderItem::STATUS_PREPARING,
+        ] )->assertOk();
+
+        $this->app->instance( ZashDineRealtimeService::class, new class extends ZashDineRealtimeService
+        {
+            protected function dispatchEvent( object $event ): void
+            {
+                throw new \RuntimeException( 'simulated reverb outage' );
+            }
+        } );
+
+        $this->json( 'POST', 'api/zash-dine/order-items/' . $item->id . '/kitchen-status', [
+            'status' => OrderItem::STATUS_READY,
+        ] )->assertOk();
+
+        $this->assertSame( OrderItem::STATUS_READY, $item->fresh()->status );
+        $this->assertDatabaseHas( 'nexopos_notifications', [
+            'identifier' => 'zash-dine-meal-ready-' . $item->id,
+            'user_id' => $waiter->id,
+        ] );
+    }
+
     public function test_board_and_meal_ready_broadcast_on_expected_private_channels(): void
     {
         Event::fake( [ZashDineBoardUpdated::class, ZashDineMealReady::class] );
@@ -275,6 +434,9 @@ final class ZashDineRealtimeTest extends TestCase
             $this->assertStringContainsString( 'rememberEventId', $html );
             $this->assertStringContainsString( 'unbindEcho', $html );
             $this->assertStringContainsString( 'Echo.leave', $html );
+            $this->assertStringContainsString( 'clearEchoWait', $html );
+            $this->assertStringContainsString( 'echoWaitTimer', $html );
+            $this->assertStringContainsString( 'DOMContentLoaded', $html );
             $this->assertStringContainsString( 'state_change', $html );
         }
 
@@ -282,6 +444,9 @@ final class ZashDineRealtimeTest extends TestCase
         $this->assertStringContainsString( 'zash-dine.floor', $floorHtml );
         $this->assertStringContainsString( '.zash-dine.meal-ready', $floorHtml );
         $this->assertStringContainsString( 'nsSnackBar.success', $floorHtml );
+        $this->assertStringContainsString( 'stopListening', $floorHtml );
+        $this->assertStringNotContainsString( "Echo.leave( 'App.User.'", $floorHtml );
+        $this->assertStringNotContainsString( 'Echo.leave( `App.User.', $floorHtml );
     }
 
     public function test_resolve_responsible_waiter_uses_order_author_not_item_author(): void

@@ -7,9 +7,10 @@ use Illuminate\Broadcasting\Channel;
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
+use Illuminate\Contracts\Events\ShouldDispatchAfterCommit;
 use Illuminate\Queue\SerializesModels;
 
-class NotificationUpdatedEvent implements ShouldBroadcast
+class NotificationUpdatedEvent implements ShouldBroadcast, ShouldDispatchAfterCommit
 {
     use InteractsWithSockets, SerializesModels;
 

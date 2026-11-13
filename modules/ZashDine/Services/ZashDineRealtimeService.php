@@ -5,10 +5,13 @@ namespace Modules\ZashDine\Services;
 use App\Models\User;
 use App\Services\NotificationService;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Modules\ZashDine\Events\ZashDineBoardUpdated;
 use Modules\ZashDine\Events\ZashDineMealReady;
 use Modules\ZashDine\Models\OrderItem;
+use Throwable;
 
 class ZashDineRealtimeService
 {
@@ -43,16 +46,29 @@ class ZashDineRealtimeService
         ?OrderItem $orderItem = null,
         ?int $orderId = null,
     ): void {
-        event( new ZashDineBoardUpdated(
-            eventId: (string) Str::uuid(),
-            reason: $reason,
-            orderItemId: $orderItem?->id,
-            orderId: $orderId ?? $orderItem?->order_id,
-            status: $orderItem?->status,
-            tableId: $orderItem?->table_id,
-            kitchenId: $orderItem?->kitchen_id,
-            occurredAt: now()->toIso8601String(),
-        ) );
+        $payload = [
+            'eventId' => (string) Str::uuid(),
+            'reason' => $reason,
+            'orderItemId' => $orderItem?->id,
+            'orderId' => $orderId ?? $orderItem?->order_id,
+            'status' => $orderItem?->status,
+            'tableId' => $orderItem?->table_id,
+            'kitchenId' => $orderItem?->kitchen_id,
+            'occurredAt' => now()->toIso8601String(),
+        ];
+
+        $this->afterSuccessfulCommit( function () use ( $payload ) {
+            $this->dispatchEvent( new ZashDineBoardUpdated(
+                eventId: $payload['eventId'],
+                reason: $payload['reason'],
+                orderItemId: $payload['orderItemId'],
+                orderId: $payload['orderId'],
+                status: $payload['status'],
+                tableId: $payload['tableId'],
+                kitchenId: $payload['kitchenId'],
+                occurredAt: $payload['occurredAt'],
+            ) );
+        } );
     }
 
     public function notifyMealReady( OrderItem $orderItem ): void
@@ -61,17 +77,32 @@ class ZashDineRealtimeService
             return;
         }
 
+        $orderItemId = (int) $orderItem->id;
+
+        $this->afterSuccessfulCommit( function () use ( $orderItemId ) {
+            $orderItem = OrderItem::query()
+                ->with( [
+                    'order:id,code,author_id',
+                    'orderProduct:id,name,quantity',
+                    'table:id,name',
+                ] )
+                ->find( $orderItemId );
+
+            if ( ! $orderItem instanceof OrderItem || $orderItem->status !== OrderItem::STATUS_READY ) {
+                return;
+            }
+
+            $this->dispatchMealReadyAlert( $orderItem );
+        } );
+    }
+
+    private function dispatchMealReadyAlert( OrderItem $orderItem ): void
+    {
         $waiterId = $this->resolveResponsibleWaiterId( $orderItem );
 
         if ( $waiterId === null ) {
             return;
         }
-
-        $orderItem->loadMissing( [
-            'order:id,code,author_id',
-            'orderProduct:id,name,quantity',
-            'table:id,name',
-        ] );
 
         $mealName = $orderItem->orderProduct?->name ?? __m( 'Meal', 'ZashDine' );
         $quantity = $orderItem->orderProduct?->quantity ?? 1;
@@ -111,7 +142,7 @@ class ZashDineRealtimeService
                 ->dispatchForUsers( Collection::make( [$waiter] ) );
         }
 
-        event( new ZashDineMealReady(
+        $this->dispatchEvent( new ZashDineMealReady(
             eventId: $eventId,
             waiterUserId: $waiterId,
             orderItemId: (int) $orderItem->id,
@@ -121,5 +152,39 @@ class ZashDineRealtimeService
             description: $description,
             occurredAt: now()->toIso8601String(),
         ) );
+    }
+
+    /**
+     * Defer side effects until the surrounding transaction commits, and never let
+     * a Reverb/broadcast failure turn a successful kitchen/floor write into an HTTP error.
+     */
+    private function afterSuccessfulCommit( callable $callback ): void
+    {
+        $run = function () use ( $callback ): void {
+            try {
+                $callback();
+            } catch ( Throwable $exception ) {
+                report( $exception );
+                Log::warning( 'ZashDine realtime side effect failed after commit.', [
+                    'message' => $exception->getMessage(),
+                ] );
+            }
+        };
+
+        if ( DB::transactionLevel() > 0 ) {
+            DB::afterCommit( $run );
+
+            return;
+        }
+
+        $run();
+    }
+
+    /**
+     * @param  object  $event
+     */
+    protected function dispatchEvent( object $event ): void
+    {
+        event( $event );
     }
 }

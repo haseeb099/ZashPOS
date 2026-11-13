@@ -46,6 +46,9 @@
                 timer: null,
                 echoChannel: null,
                 echoBound: false,
+                echoDestroyed: false,
+                echoWaitTimer: null,
+                echoDomReadyHandler: null,
                 liveConnected: false,
                 seenEventIds: [],
                 connectionHandler: null,
@@ -109,8 +112,59 @@
 
                 this.refresh( true );
             },
+            clearEchoWait() {
+                if ( this.echoWaitTimer ) {
+                    window.clearInterval( this.echoWaitTimer );
+                    this.echoWaitTimer = null;
+                }
+
+                if ( this.echoDomReadyHandler ) {
+                    document.removeEventListener( 'DOMContentLoaded', this.echoDomReadyHandler );
+                    this.echoDomReadyHandler = null;
+                }
+            },
             bindEcho() {
-                if ( typeof Echo === 'undefined' || this.echoBound ) {
+                if ( this.echoDestroyed || this.echoBound ) {
+                    return;
+                }
+
+                if ( typeof Echo !== 'undefined' ) {
+                    this.attachEcho();
+
+                    return;
+                }
+
+                /**
+                 * Dashboard creates window.Echo inside DOMContentLoaded. This
+                 * component may mount before or after that assignment.
+                 */
+                this.echoDomReadyHandler = () => {
+                    if ( this.echoDestroyed || this.echoBound ) {
+                        return;
+                    }
+
+                    if ( typeof Echo !== 'undefined' ) {
+                        this.clearEchoWait();
+                        this.attachEcho();
+                    }
+                };
+                document.addEventListener( 'DOMContentLoaded', this.echoDomReadyHandler );
+
+                this.echoWaitTimer = window.setInterval( () => {
+                    if ( this.echoDestroyed ) {
+                        this.clearEchoWait();
+
+                        return;
+                    }
+
+                    if ( typeof Echo !== 'undefined' ) {
+                        this.clearEchoWait();
+                        this.attachEcho();
+                    }
+                }, 100 );
+            },
+            attachEcho() {
+                if ( this.echoDestroyed || this.echoBound || typeof Echo === 'undefined' ) {
                     return;
                 }
 
@@ -140,6 +194,9 @@
                 }
             },
             unbindEcho() {
+                this.echoDestroyed = true;
+                this.clearEchoWait();
+
                 try {
                     const pusher = typeof Echo !== 'undefined' ? Echo.connector?.pusher : null;
 
@@ -147,7 +204,7 @@
                         pusher.connection.unbind( 'state_change', this.connectionHandler );
                     }
 
-                    if ( typeof Echo !== 'undefined' ) {
+                    if ( typeof Echo !== 'undefined' && this.echoBound ) {
                         Echo.leave( CHANNEL );
                     }
                 } catch ( error ) {

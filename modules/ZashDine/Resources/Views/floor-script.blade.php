@@ -70,10 +70,14 @@
                 error: null,
                 timer: null,
                 echoBound: false,
+                echoDestroyed: false,
+                echoWaitTimer: null,
+                echoDomReadyHandler: null,
                 liveConnected: false,
                 seenEventIds: [],
                 connectionHandler: null,
                 userChannelName: null,
+                userChannel: null,
                 labels,
             };
         },
@@ -133,8 +137,55 @@
 
                 this.loadFloor( false );
             },
+            clearEchoWait() {
+                if ( this.echoWaitTimer ) {
+                    window.clearInterval( this.echoWaitTimer );
+                    this.echoWaitTimer = null;
+                }
+
+                if ( this.echoDomReadyHandler ) {
+                    document.removeEventListener( 'DOMContentLoaded', this.echoDomReadyHandler );
+                    this.echoDomReadyHandler = null;
+                }
+            },
             bindEcho() {
-                if ( typeof Echo === 'undefined' || this.echoBound ) {
+                if ( this.echoDestroyed || this.echoBound ) {
+                    return;
+                }
+
+                if ( typeof Echo !== 'undefined' ) {
+                    this.attachEcho();
+
+                    return;
+                }
+
+                this.echoDomReadyHandler = () => {
+                    if ( this.echoDestroyed || this.echoBound ) {
+                        return;
+                    }
+
+                    if ( typeof Echo !== 'undefined' ) {
+                        this.clearEchoWait();
+                        this.attachEcho();
+                    }
+                };
+                document.addEventListener( 'DOMContentLoaded', this.echoDomReadyHandler );
+
+                this.echoWaitTimer = window.setInterval( () => {
+                    if ( this.echoDestroyed ) {
+                        this.clearEchoWait();
+
+                        return;
+                    }
+
+                    if ( typeof Echo !== 'undefined' ) {
+                        this.clearEchoWait();
+                        this.attachEcho();
+                    }
+                }, 100 );
+            },
+            attachEcho() {
+                if ( this.echoDestroyed || this.echoBound || typeof Echo === 'undefined' ) {
                     return;
                 }
 
@@ -147,7 +198,11 @@
 
                     if ( userId > 0 ) {
                         this.userChannelName = `App.User.${userId}`;
-                        Echo.private( this.userChannelName ).listen( READY_EVENT, ( payload ) => {
+                        /**
+                         * Keep the shared App.User channel alive for dashboard
+                         * notifications: only detach this component's meal-ready listener.
+                         */
+                        this.userChannel = Echo.private( this.userChannelName ).listen( READY_EVENT, ( payload ) => {
                             this.onMealReady( payload );
                         } );
                     }
@@ -174,6 +229,9 @@
                 }
             },
             unbindEcho() {
+                this.echoDestroyed = true;
+                this.clearEchoWait();
+
                 try {
                     const pusher = typeof Echo !== 'undefined' ? Echo.connector?.pusher : null;
 
@@ -181,11 +239,11 @@
                         pusher.connection.unbind( 'state_change', this.connectionHandler );
                     }
 
-                    if ( typeof Echo !== 'undefined' ) {
+                    if ( typeof Echo !== 'undefined' && this.echoBound ) {
                         Echo.leave( BOARD_CHANNEL );
 
-                        if ( this.userChannelName ) {
-                            Echo.leave( this.userChannelName );
+                        if ( this.userChannel && typeof this.userChannel.stopListening === 'function' ) {
+                            this.userChannel.stopListening( READY_EVENT );
                         }
                     }
                 } catch ( error ) {
@@ -196,6 +254,7 @@
                 this.liveConnected = false;
                 this.connectionHandler = null;
                 this.userChannelName = null;
+                this.userChannel = null;
             },
             loadFloor( showLoading = true ) {
                 if ( showLoading ) {

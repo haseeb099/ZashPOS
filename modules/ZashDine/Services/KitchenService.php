@@ -295,8 +295,9 @@ class KitchenService
             ] );
 
             /**
-             * Events implement ShouldDispatchAfterCommit so clients never see
-             * a status change that later rolls back with the transaction.
+             * Realtime side effects are deferred until commit (and swallow Reverb
+             * failures) so a rolled-back status never notifies and a socket outage
+             * never turns a valid kitchen write into an HTTP error.
              */
             $this->realtimeService->publishBoardUpdate(
                 ZashDineRealtimeService::REASON_KITCHEN_STATUS,
