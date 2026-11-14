@@ -17,6 +17,12 @@ use Tests\Traits\WithAuthentication;
 /**
  * Module-side host guard must work even when the receiving core lacks the
  * capability-aware ModulesService loader from this PR.
+ *
+ * Limitation: the ZIP older-loader scenario still runs on this PR's
+ * ModulesService — it strips requires-capabilities and force-enables past the
+ * new check. That proves the module-side gate + soft rejection, but does not
+ * independently prove behaviour on a binary that also lacks this PR's
+ * in-memory enable/disable synchronization.
  */
 final class ZashDineCompatibilityGuardTest extends TestCase
 {
@@ -86,6 +92,16 @@ final class ZashDineCompatibilityGuardTest extends TestCase
         }
 
         File::copyDirectory( $modulePath, $backupPath );
+        register_shutdown_function( function () use ( $backupPath, $modulePath ): void {
+            if ( ! is_dir( $backupPath ) ) {
+                return;
+            }
+            if ( is_dir( $modulePath ) ) {
+                File::deleteDirectory( $modulePath );
+            }
+            File::copyDirectory( $backupPath, $modulePath );
+            File::deleteDirectory( $backupPath );
+        } );
         File::deleteDirectory( $modulePath );
 
         /** @var ModulesService $modules */

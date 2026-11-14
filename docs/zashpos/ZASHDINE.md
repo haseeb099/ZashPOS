@@ -119,8 +119,9 @@ Official guidance used for Phase 5 checks (not legal advice):
 | Check | How | Evidence |
 | --- | --- | --- |
 | Independent exclusive **and** inclusive flat VAT (fixed £ prices @ 20%; e.g. £20 + 20% → £24) with modifiers × meal qty, hold→pay | `ZashDineReceiptVatTest` | PHPUnit |
+| Create/update: £20 vs £24 exclusive payable stays partial (or rejects when partial disabled); £24 is paid; underpaid dine-in keeps table occupied | `ZashDineReceiptVatTest` | PHPUnit |
 | Receipt HTML: store name, VAT No., meal name, **modifier name**, Inclusive/Exclusive label, formatted tax + total | GET `/dashboard/orders/receipt/{id}` (`ns-receipt-product-name`) | PHPUnit |
-| Module-side capability guard on hosts without capability-aware loader | `ZashDineCompatibilityGuardTest` | PHPUnit |
+| Module-side capability guard (ZIP-side; older-loader scenario still uses this PR’s ModulesService with attr stripped — sync limitation documented) | `ZashDineCompatibilityGuardTest` | PHPUnit |
 | Modifier money on bill | Baked into `unit_price` (D-017); receipt line total matches baked price × qty | PHPUnit + POS E2E |
 | Waiter → table → modifiers → kitchen → ready → pay, hold/reopen, cancel, stock | Playwright `e2e/` with `E2E_REVERB=1` | Playwright report |
 

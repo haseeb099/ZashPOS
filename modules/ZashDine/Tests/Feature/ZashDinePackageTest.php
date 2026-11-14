@@ -135,6 +135,16 @@ final class ZashDinePackageTest extends TestCase
 
         $this->assertDirectoryExists( $modulePath );
         File::copyDirectory( $modulePath, $backupPath );
+        register_shutdown_function( function () use ( $backupPath ): void {
+            if ( is_dir( $backupPath ) ) {
+                $modulePath = base_path( 'modules/ZashDine' );
+                if ( is_dir( $modulePath ) ) {
+                    File::deleteDirectory( $modulePath );
+                }
+                File::copyDirectory( $backupPath, $modulePath );
+                File::deleteDirectory( $backupPath );
+            }
+        } );
         File::deleteDirectory( $modulePath );
         $this->forgetModule( $modules, 'ZashDine' );
         $modules->load();

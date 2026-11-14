@@ -22,10 +22,13 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use Modules\ZashDine\Models\Area;
+use Modules\ZashDine\Models\DiningTable;
 use Modules\ZashDine\Models\Modifier;
 use Modules\ZashDine\Models\ModifierGroup;
 use Modules\ZashDine\Models\OrderProductModifier;
 use Modules\ZashDine\Services\CoreCompatibilityService;
+use Modules\ZashDine\Services\DineInTableService;
 use Modules\ZashDine\Services\ModifierService;
 use Tests\TestCase;
 use Tests\Traits\WithAuthentication;
@@ -121,6 +124,228 @@ final class ZashDineReceiptVatTest extends TestCase
             expectedTax: $tax,
             expectedPayable: $gross,
         );
+    }
+
+
+    public function test_exclusive_vat_create_with_net_payment_stays_partial_not_paid(): void
+    {
+        ns()->option->set( 'ns_orders_allow_partial', 'yes' );
+
+        $built = $this->buildExclusiveTwentyPercentCart();
+        $responses = $this->processOrders( array_merge( $built['order'], [
+            'payments' => [[
+                'identifier' => OrderPayment::PAYMENT_CASH,
+                'value' => 20.0,
+            ]],
+        ] ) );
+
+        $order = $responses[0]['order-creation']['data']['order'] ?? null;
+        $this->assertIsArray( $order );
+        $this->assertEqualsWithDelta( 24.0, (float) ( $order['total'] ?? 0 ), 0.02 );
+        $this->assertSame(
+            Order::PAYMENT_PARTIALLY,
+            $order['payment_status'],
+            '£20 against £24 exclusive VAT payable must not be classified as paid at create.'
+        );
+    }
+
+    public function test_exclusive_vat_create_rejects_net_payment_when_partial_disabled(): void
+    {
+        ns()->option->set( 'ns_orders_allow_partial', 'no' );
+
+        $built = $this->buildExclusiveTwentyPercentCart();
+
+        try {
+            $this->processOrders( array_merge( $built['order'], [
+                'payments' => [[
+                    'identifier' => OrderPayment::PAYMENT_CASH,
+                    'value' => 20.0,
+                ]],
+            ] ) );
+            $this->fail( 'Expected underpayment against exclusive VAT payable to be rejected when partial payments are disabled.' );
+        } catch ( \Throwable $e ) {
+            $this->assertStringContainsStringIgnoringCase( 'partial', $e->getMessage() );
+        } finally {
+            ns()->option->set( 'ns_orders_allow_partial', 'yes' );
+        }
+    }
+
+    public function test_exclusive_vat_create_with_full_payment_is_paid(): void
+    {
+        ns()->option->set( 'ns_orders_allow_partial', 'yes' );
+
+        $built = $this->buildExclusiveTwentyPercentCart();
+        $responses = $this->processOrders( array_merge( $built['order'], [
+            'payments' => [[
+                'identifier' => OrderPayment::PAYMENT_CASH,
+                'value' => 24.0,
+            ]],
+        ] ) );
+
+        $order = $responses[0]['order-creation']['data']['order'] ?? null;
+        $this->assertIsArray( $order );
+        $this->assertEqualsWithDelta( 24.0, (float) ( $order['total'] ?? 0 ), 0.02 );
+        $this->assertSame( Order::PAYMENT_PAID, $order['payment_status'] );
+    }
+
+    public function test_exclusive_vat_update_with_net_payment_stays_partial_not_paid(): void
+    {
+        ns()->option->set( 'ns_orders_allow_partial', 'yes' );
+
+        $built = $this->buildExclusiveTwentyPercentCart();
+        $held = $this->processOrders( array_merge( $built['order'], [
+            'payment_status' => Order::PAYMENT_HOLD,
+            'payments' => [],
+        ] ) );
+
+        $order = $held[0]['order-creation']['data']['order'] ?? null;
+        $this->assertIsArray( $order );
+        $orderId = (int) $order['id'];
+        $line = $order['products'][0] ?? null;
+        $this->assertIsArray( $line );
+
+        $update = $this->json( 'PUT', 'api/orders/' . $orderId, array_merge( $built['order'], [
+            'type' => ['identifier' => $order['type']['identifier'] ?? 'takeaway'],
+            'subtotal' => $order['subtotal'] ?? 20.0,
+            'discount' => 0,
+            'discount_type' => 'percentage',
+            'discount_percentage' => 0,
+            'payments' => [[
+                'identifier' => OrderPayment::PAYMENT_CASH,
+                'value' => 20.0,
+            ]],
+            'products' => [array_merge( $built['order']['products'][0], [
+                'id' => $line['id'],
+            ])],
+        ] ) );
+
+        if ( $update->status() !== 200 ) {
+            $this->fail( 'Order update failed: ' . $update->status() . ' ' . $update->getContent() );
+        }
+
+        $updated = $update->json( 'data.order' );
+        $this->assertEqualsWithDelta( 24.0, (float) ( $updated['total'] ?? 0 ), 0.02 );
+        $this->assertSame(
+            Order::PAYMENT_PARTIALLY,
+            $updated['payment_status'],
+            '£20 against £24 exclusive VAT payable must stay partial on update.'
+        );
+    }
+
+    public function test_underpaid_exclusive_vat_dine_in_keeps_table_occupied(): void
+    {
+        ns()->option->set( 'ns_orders_allow_partial', 'yes' );
+
+        $area = Area::query()->create( [
+            'name' => 'VAT Floor ' . Str::random( 4 ),
+            'author_id' => auth()->id(),
+        ] );
+        $table = DiningTable::query()->create( [
+            'area_id' => $area->id,
+            'name' => 'T-' . Str::random( 4 ),
+            'seats' => 4,
+            'status' => DiningTable::STATUS_AVAILABLE,
+            'author_id' => auth()->id(),
+        ] );
+
+        $built = $this->buildExclusiveTwentyPercentCart();
+        $responses = $this->processOrders( array_merge( $built['order'], [
+            'type' => ['identifier' => DineInTableService::ORDER_TYPE],
+            DineInTableService::TABLE_FIELD => $table->id,
+            'payments' => [[
+                'identifier' => OrderPayment::PAYMENT_CASH,
+                'value' => 20.0,
+            ]],
+        ] ) );
+
+        $order = $responses[0]['order-creation']['data']['order'] ?? null;
+        $this->assertIsArray( $order );
+        $this->assertSame( Order::PAYMENT_PARTIALLY, $order['payment_status'] );
+        $this->assertEqualsWithDelta( 24.0, (float) ( $order['total'] ?? 0 ), 0.02 );
+
+        $this->assertDatabaseHas( 'zash_dine_tables', [
+            'id' => $table->id,
+            'current_order_id' => $order['id'],
+            'status' => DiningTable::STATUS_OCCUPIED,
+        ] );
+    }
+
+    /**
+     * @return array{order: array<string, mixed>}
+     */
+    private function buildExclusiveTwentyPercentCart(): array
+    {
+        [$meal, $mealUnit, $ingredient] = $this->stockedPair();
+        $this->cleanupMealId = (int) $meal->id;
+
+        $mealUnit->sale_price_edit = self::MEAL_BASE;
+        $mealUnit->sale_price = self::MEAL_BASE;
+        $mealUnit->save();
+
+        $group = ModifierGroup::query()->create( [
+            'name' => 'VAT Pay Addons ' . Str::random( 5 ),
+            'selection_type' => ModifierGroup::SELECTION_SINGLE,
+            'min_selections' => 1,
+            'max_selections' => null,
+            'allow_quantity' => true,
+            'author_id' => auth()->id(),
+        ] );
+        $this->cleanupGroupId = (int) $group->id;
+
+        $modifier = Modifier::query()->create( [
+            'modifier_group_id' => $group->id,
+            'name' => 'PaySauce ' . Str::random( 4 ),
+            'price' => self::MODIFIER_PRICE,
+            'product_id' => $ingredient->id,
+            'status' => Modifier::STATUS_ENABLED,
+            'author_id' => auth()->id(),
+        ] );
+
+        app( ModifierService::class )->replaceProductGroups( $meal, [$group->id] );
+
+        $taxGroup = $this->makeTwentyPercentTaxGroup();
+        $taxes = [[
+            'tax_id' => $taxGroup->taxes->first()->id,
+            'name' => $taxGroup->taxes->first()->name,
+            'tax_name' => $taxGroup->taxes->first()->name,
+            'rate' => self::VAT_RATE,
+        ]];
+
+        ns()->option->set( 'ns_pos_vat', self::TAX_FLAT );
+        ns()->option->set( 'ns_pos_tax_group', $taxGroup->id );
+        ns()->option->set( 'ns_pos_tax_type', 'exclusive' );
+
+        $unitPrice = self::MEAL_BASE + ( self::MODIFIER_PRICE * self::MODIFIER_QTY );
+        $customer = Customer::query()->firstOrFail();
+
+        return [
+            'order' => [
+                'customer_id' => $customer->id,
+                'shipping' => 0,
+                'tax_group_id' => $taxGroup->id,
+                'tax_type' => 'exclusive',
+                'taxes' => $taxes,
+                'products' => [[
+                    'product_id' => $meal->id,
+                    'name' => $meal->name,
+                    'quantity' => self::MEAL_QTY,
+                    'unit_price' => $unitPrice,
+                    'unit_quantity_id' => $mealUnit->id,
+                    'unit_id' => $mealUnit->unit_id,
+                    'discount' => 0,
+                    'discount_type' => 'percentage',
+                    'discount_percentage' => 0,
+                    'tax_type' => 'exclusive',
+                    'tax_group_id' => $taxGroup->id,
+                    'mode' => 'normal',
+                    'zash_dine_modifiers' => [[
+                        'modifier_id' => $modifier->id,
+                        'quantity' => self::MODIFIER_QTY,
+                    ]],
+                ]],
+                'coupons' => [],
+            ],
+        ];
     }
 
     private function assertFixedVatScenario(
