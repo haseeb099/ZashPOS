@@ -17,6 +17,9 @@ spl_autoload_register( static function ( string $class ) use ( $applicationBaseP
     $prefixes = [
         'App\\' => $applicationBasePath . DIRECTORY_SEPARATOR . 'app',
         'Modules\\' => $applicationBasePath . DIRECTORY_SEPARATOR . 'modules',
+        'Tests\\' => $applicationBasePath . DIRECTORY_SEPARATOR . 'tests',
+        'Database\\Factories\\' => $applicationBasePath . DIRECTORY_SEPARATOR . 'database' . DIRECTORY_SEPARATOR . 'factories',
+        'Database\\Seeders\\' => $applicationBasePath . DIRECTORY_SEPARATOR . 'database' . DIRECTORY_SEPARATOR . 'seeders',
     ];
 
     foreach ( $prefixes as $prefix => $root ) {
