@@ -7,6 +7,7 @@ use Modules\ZashDine\Services\DineInTableService;
 
 class OrderAfterUpdatedEventListener
 {
+
     public function __construct( protected DineInTableService $dineInTableService )
     {
         //
@@ -14,6 +15,7 @@ class OrderAfterUpdatedEventListener
 
     public function handle( OrderAfterUpdatedEvent $event ): void
     {
+
         $this->dineInTableService->syncOrderItemsFromOrder( $event->order );
     }
 }

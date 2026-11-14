@@ -29,7 +29,7 @@ class CheckMigrationStatus
              */
             $module = app()->make( ModulesService::class );
             $modules = collect( $module->getEnabledAndAutoloadedModules() );
-            $total = $modules->filter( fn( $module ) => count( $module[ 'migrations' ] ) > 0 );
+            $total = $modules->filter( fn( $module ) => count( $module[ 'migrations' ] ?? [] ) > 0 );
 
             if ( $total->count() > 0 ) {
                 return redirect( ns()->route( 'ns.database-update' ) );

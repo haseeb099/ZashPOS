@@ -230,6 +230,15 @@ class OrdersService
         $taxes = $this->__registerTaxes( $order, $fields[ 'taxes' ] ?? [] );
 
         /**
+         * Flat/variable VAT is known only after __registerTaxes. Recompute the
+         * payable total so exclusive tax is included (hold and paid paths).
+         */
+        $this->__computeOrderTotal(
+            order: $order,
+            products: collect( $orderProducts )
+        );
+
+        /**
          * Those fields might be used while running a listener on
          * either the create or update event of the order.
          */

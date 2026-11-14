@@ -1,10 +1,11 @@
 <?xml version="1.0" ?>
 <module>
     <namespace>ZashDine</namespace>
-    <version>1.0</version>
+    <version>1.0.0</version>
     <author>ZashPOS</author>
     <name>ZashDine</name>
     <description>
         <locale lang="en">Restaurant dine-in module for ZashPOS (tables, kitchens, modifiers).</locale>
     </description>
+    <core min-version="6.3.0" requires-capabilities="order-product-canonical-unit-price,pos-cart-products-mergeable" />
 </module>

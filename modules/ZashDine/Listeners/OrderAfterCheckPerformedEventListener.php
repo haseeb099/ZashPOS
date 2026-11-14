@@ -8,6 +8,7 @@ use Modules\ZashDine\Services\ModifierService;
 
 class OrderAfterCheckPerformedEventListener
 {
+
     public function __construct(
         protected DineInTableService $dineInTableService,
         protected ModifierService $modifierService,
@@ -17,6 +18,7 @@ class OrderAfterCheckPerformedEventListener
 
     public function handle( OrderAfterCheckPerformedEvent $event ): void
     {
+
         $fields = is_array( $event->fields ) ? $event->fields : [];
 
         $this->dineInTableService->assertDineInCanProceed( $fields, $event->order );
