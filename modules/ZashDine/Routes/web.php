@@ -8,6 +8,8 @@ use Modules\ZashDine\Http\Controllers\AreasController;
 use Modules\ZashDine\Http\Controllers\FloorController;
 use Modules\ZashDine\Http\Controllers\KitchenScreenController;
 use Modules\ZashDine\Http\Controllers\KitchensController;
+use Modules\ZashDine\Http\Controllers\ModifierGroupsController;
+use Modules\ZashDine\Http\Controllers\ModifiersController;
 use Modules\ZashDine\Http\Controllers\TablesController;
 
 Route::middleware( [
@@ -25,6 +27,14 @@ Route::middleware( [
     Route::get( 'kitchens', [KitchensController::class, 'list'] )->name( 'zash-dine.kitchens.list' );
     Route::get( 'kitchens/create', [KitchensController::class, 'create'] )->name( 'zash-dine.kitchens.create' );
     Route::get( 'kitchens/edit/{kitchen}', [KitchensController::class, 'edit'] )->name( 'zash-dine.kitchens.edit' );
+
+    Route::get( 'modifier-groups', [ModifierGroupsController::class, 'list'] )->name( 'zash-dine.modifier-groups.list' );
+    Route::get( 'modifier-groups/create', [ModifierGroupsController::class, 'create'] )->name( 'zash-dine.modifier-groups.create' );
+    Route::get( 'modifier-groups/edit/{modifierGroup}', [ModifierGroupsController::class, 'edit'] )->name( 'zash-dine.modifier-groups.edit' );
+
+    Route::get( 'modifiers', [ModifiersController::class, 'list'] )->name( 'zash-dine.modifiers.list' );
+    Route::get( 'modifiers/create', [ModifiersController::class, 'create'] )->name( 'zash-dine.modifiers.create' );
+    Route::get( 'modifiers/edit/{modifier}', [ModifiersController::class, 'edit'] )->name( 'zash-dine.modifiers.edit' );
 } );
 
 Route::middleware( [

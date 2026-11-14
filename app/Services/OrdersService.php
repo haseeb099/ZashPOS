@@ -717,6 +717,13 @@ class OrdersService
                     default => $unitQuantity->sale_price_edit,
                 };
 
+                $canonicalPrice = Hook::filter(
+                    'ns-order-product-canonical-unit-price',
+                    $canonicalPrice,
+                    $product,
+                    $mode
+                );
+
                 if ( $mode === 'custom' || ! $this->pricesMatch( $product['unit_price'] ?? null, $canonicalPrice ) ) {
                     $this->__restrictPosAction( 'nexopos.cart.product-price' );
                 }

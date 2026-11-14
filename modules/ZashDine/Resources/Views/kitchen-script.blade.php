@@ -306,6 +306,11 @@
                         <div class="flex flex-wrap items-start justify-between gap-2">
                             <div>
                                 <p class="font-semibold text-fontcolor break-words">@{{ ticket.quantity }} × @{{ ticket.name }}</p>
+                                <ul v-if="ticket.modifiers && ticket.modifiers.length" class="mt-1 space-y-0.5">
+                                    <li v-for="modifier in ticket.modifiers" :key="modifier.id" class="text-sm text-fontcolor-soft break-words">
+                                        @{{ modifier.quantity }} × @{{ modifier.name }}
+                                    </li>
+                                </ul>
                                 <p class="text-xs text-fontcolor-soft">
                                     @{{ labels.table }}: @{{ ticket.table_name || '—' }} ·
                                     @{{ labels.order }}: @{{ ticket.order_code || ticket.order_id }} ·

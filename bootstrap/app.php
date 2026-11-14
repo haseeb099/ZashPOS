@@ -1,5 +1,13 @@
 <?php
 
+/**
+ * Local tooling only (D-018). Production entry points stay free of prefer-app-modules.
+ * Set ZASHPOS_PREFER_LOCAL_APP=1 (scripts/local-artisan.ps1, .env.e2e) when vendor/ is a junction.
+ */
+if ( ( getenv( 'ZASHPOS_PREFER_LOCAL_APP' ) ?: ( $_SERVER['ZASHPOS_PREFER_LOCAL_APP'] ?? '' ) ) === '1' ) {
+    require __DIR__ . '/prefer-app-modules.php';
+}
+
 use App\Classes\ModuleRouting;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Application;

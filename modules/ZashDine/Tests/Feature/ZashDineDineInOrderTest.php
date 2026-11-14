@@ -407,7 +407,8 @@ final class ZashDineDineInOrderTest extends TestCase
             app( OrdersService::class ),
             $productService,
             app( \Modules\ZashDine\Services\KitchenService::class ),
-            app( \Modules\ZashDine\Services\ZashDineRealtimeService::class )
+            app( \Modules\ZashDine\Services\ZashDineRealtimeService::class ),
+            app( \Modules\ZashDine\Services\ModifierService::class ),
         );
 
         $thrown = null;

@@ -16,3 +16,4 @@ $_SERVER['APP_BASE_PATH'] = $applicationBasePath;
 putenv( "APP_BASE_PATH={$applicationBasePath}" );
 
 require_once $applicationBasePath . '/vendor/autoload.php';
+require_once $applicationBasePath . '/bootstrap/prefer-app-modules.php';

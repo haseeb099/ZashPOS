@@ -4,12 +4,16 @@ namespace Modules\ZashDine\Providers;
 
 use App\Classes\AsideMenu;
 use App\Classes\Hook;
+use App\Models\OrderProduct;
 use App\Models\User;
 use Illuminate\Support\Facades\Broadcast;
 use Illuminate\Support\ServiceProvider;
 use Modules\ZashDine\Crud\AreaCrud;
 use Modules\ZashDine\Crud\DiningTableCrud;
 use Modules\ZashDine\Crud\KitchenCrud;
+use Modules\ZashDine\Crud\ModifierCrud;
+use Modules\ZashDine\Crud\ModifierGroupCrud;
+use Modules\ZashDine\Services\ModifierService;
 
 class ZashDineServiceProvider extends ServiceProvider
 {
@@ -24,6 +28,8 @@ class ZashDineServiceProvider extends ServiceProvider
                 AreaCrud::IDENTIFIER, AreaCrud::class => AreaCrud::class,
                 DiningTableCrud::IDENTIFIER, DiningTableCrud::class => DiningTableCrud::class,
                 KitchenCrud::IDENTIFIER, KitchenCrud::class => KitchenCrud::class,
+                ModifierGroupCrud::IDENTIFIER, ModifierGroupCrud::class => ModifierGroupCrud::class,
+                ModifierCrud::IDENTIFIER, ModifierCrud::class => ModifierCrud::class,
                 default => $resource,
             };
         } );
@@ -65,6 +71,18 @@ class ZashDineServiceProvider extends ServiceProvider
                         permissions: ['zash.dine.manage']
                     ),
                     AsideMenu::subMenu(
+                        label: __m( 'Modifier Groups', 'ZashDine' ),
+                        identifier: 'zash-dine-modifier-groups',
+                        href: ns()->route( 'zash-dine.modifier-groups.list' ),
+                        permissions: ['zash.dine.manage']
+                    ),
+                    AsideMenu::subMenu(
+                        label: __m( 'Modifiers', 'ZashDine' ),
+                        identifier: 'zash-dine-modifiers',
+                        href: ns()->route( 'zash-dine.modifiers.list' ),
+                        permissions: ['zash.dine.manage']
+                    ),
+                    AsideMenu::subMenu(
                         label: __m( 'Floor', 'ZashDine' ),
                         identifier: 'zash-dine-floor',
                         href: ns()->route( 'zash-dine.floor' ),
@@ -91,10 +109,44 @@ class ZashDineServiceProvider extends ServiceProvider
 
             return array_merge( $menus, $zashDineMenu );
         } );
+
+        Hook::addFilter( 'ns-products-crud-form', function ( $form ) {
+            if ( ! is_array( $form ) ) {
+                return $form;
+            }
+
+            return app( ModifierService::class )->appendProductFormTab( $form );
+        } );
+
+        Hook::addFilter( 'ns-create-products-inputs', function ( $inputs, $source = null ) {
+            return app( ModifierService::class )->captureProductModifierGroups(
+                is_array( $inputs ) ? $inputs : [],
+                $source
+            );
+        }, 20, 2 );
+
+        Hook::addFilter( 'ns-update-products-inputs', function ( $inputs, $source = null ) {
+            return app( ModifierService::class )->captureProductModifierGroups(
+                is_array( $inputs ) ? $inputs : [],
+                $source
+            );
+        }, 20, 3 );
+
+        Hook::addFilter( 'ns-order-product-canonical-unit-price', function ( $price, $product = [] ) {
+            if ( ! is_array( $product ) ) {
+                return $price;
+            }
+
+            return app( ModifierService::class )->adjustCanonicalUnitPrice( $price, $product );
+        }, 20, 3 );
     }
 
     public function boot(): void
     {
+        OrderProduct::deleting( function ( OrderProduct $orderProduct ): void {
+            app( ModifierService::class )->releaseAppliedStock( $orderProduct );
+        } );
+
         Broadcast::channel( 'zash-dine.kitchen', function ( User $user ) {
             return $user->allowedTo( ['zash.dine.chef', 'zash.dine.manage'] );
         } );
