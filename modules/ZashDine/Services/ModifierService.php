@@ -536,25 +536,46 @@ class ModifierService
         }
 
         $groups = $productId > 0 ? $this->assignedGroups( $productId ) : collect();
+        $sameCatalogProduct = $this->isSameCatalogProduct( $product, $productId );
+        /**
+         * Only an unchanged selection on the same catalog product may keep historical
+         * terms when catalog rules later tighten. Partial edits and meal replacements
+         * re-validate against the groups assigned to the incoming product.
+         */
+        $historicalUnchanged = $sameCatalogProduct
+            && $persisted->isNotEmpty()
+            && $this->fingerprint( $lines ) === $this->fingerprint(
+                $persisted->map( fn ( OrderProductModifier $row ) => [
+                    'modifier_id' => (int) $row->modifier_id,
+                    'quantity' => (float) $row->quantity,
+                ] )->values()->all()
+            );
+
         $byGroup = [];
-        $hasIncomingSelection = false;
 
         foreach ( $lines as $line ) {
             $existing = $persisted->get( (int) $line['modifier_id'] );
 
-            if ( $existing instanceof OrderProductModifier ) {
+            if ( $historicalUnchanged && $existing instanceof OrderProductModifier ) {
+                continue;
+            }
+
+            if ( $existing instanceof OrderProductModifier && $sameCatalogProduct ) {
                 $groupId = $existing->modifier_group_id ? (int) $existing->modifier_group_id : 0;
                 $group = $groups->firstWhere( 'id', $groupId );
 
-                if ( $group instanceof ModifierGroup ) {
-                    $byGroup[$group->id][] = $line;
-                    $this->assertQuantityRules( $group, $line );
+                if ( ! $group instanceof ModifierGroup ) {
+                    throw new NotAllowedException(
+                        __m( 'The modifier does not belong to an allowed group for this product.', 'ZashDine' )
+                    );
                 }
+
+                $byGroup[$group->id][] = $line;
+                $this->assertQuantityRules( $group, $line );
 
                 continue;
             }
 
-            $hasIncomingSelection = true;
             $modifier = $this->modifierOrFail( (int) $line['modifier_id'] );
             $group = $groups->firstWhere( 'id', $modifier->modifier_group_id );
 
@@ -568,14 +589,7 @@ class ModifierService
             $this->assertQuantityRules( $group, $line );
         }
 
-        /**
-         * Persisted selections keep their recorded terms if the catalog later tightens.
-         * New lines (even with omitted metadata), clears, and newly added modifiers use
-         * current group min/max. Omitted metadata on existing lines reconciles and skips.
-         */
-        $explicitClear = $selection['key_present'] && $lines === [] && $persisted->isNotEmpty();
-
-        if ( $hasIncomingSelection || $explicitClear || $persisted->isEmpty() ) {
+        if ( ! $historicalUnchanged ) {
             foreach ( $groups as $group ) {
                 $chosen = $byGroup[$group->id] ?? [];
                 $count = count( $chosen );
@@ -623,6 +637,22 @@ class ModifierService
                 __m( 'The line price does not match the selected modifiers.', 'ZashDine' )
             );
         }
+    }
+
+    /**
+     * @param  array<string, mixed>  $product
+     */
+    protected function isSameCatalogProduct( array $product, int $incomingProductId ): bool
+    {
+        $orderProductId = (int) ( $product['id'] ?? 0 );
+
+        if ( $orderProductId < 1 || $incomingProductId < 1 ) {
+            return false;
+        }
+
+        $persistedProductId = OrderProduct::query()->whereKey( $orderProductId )->value( 'product_id' );
+
+        return $persistedProductId !== null && (int) $persistedProductId === $incomingProductId;
     }
 
     /**

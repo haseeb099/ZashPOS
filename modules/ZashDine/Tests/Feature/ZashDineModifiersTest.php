@@ -538,6 +538,155 @@ final class ZashDineModifiersTest extends TestCase
         $this->attemptAuthenticate();
     }
 
+    public function test_partial_modifier_removal_enforces_group_minimum_without_side_effects(): void
+    {
+        [$meal, $mealUnit, $ingredient] = $this->stockedPair();
+        $group = $this->makeGroup( [
+            'selection_type' => ModifierGroup::SELECTION_MULTIPLE,
+            'min_selections' => 2,
+            'max_selections' => 2,
+            'allow_quantity' => false,
+        ] );
+        $first = $this->makeModifier( $group, $ingredient, ['price' => 1] );
+        $second = $this->makeModifier( $group, $ingredient, ['price' => 1.5] );
+        $this->assignGroup( $meal, $group );
+
+        $selection = [
+            ['modifier_id' => $first->id, 'quantity' => 1],
+            ['modifier_id' => $second->id, 'quantity' => 1],
+        ];
+        $unitPrice = $this->bakedPrice( $mealUnit, 2.5 );
+        $order = $this->placeOrder( $this->takeawayDetails( $this->productLine(
+            $meal,
+            $mealUnit,
+            1,
+            $unitPrice,
+            $selection
+        ) ) );
+
+        $saved = $order['products'][0];
+        $stockBefore = $this->stockOf( $ingredient );
+        $historyBefore = $this->modifierHistoryCount( $ingredient->id );
+        $rowsBefore = OrderProductModifier::query()
+            ->where( 'order_product_id', $saved['id'] )
+            ->orderBy( 'modifier_id' )
+            ->get( ['modifier_id', 'quantity', 'price', 'stock_applied', 'name'] )
+            ->toArray();
+
+        $partial = $this->savedProductLine(
+            $saved,
+            [['modifier_id' => $first->id, 'quantity' => 1]],
+            $this->bakedPrice( $mealUnit, 1 ),
+            1
+        );
+        $response = $this->resubmit( $order, $partial );
+        $this->assertSame( 403, $response->status(), (string) $response->getContent() );
+        $this->assertStringContainsString( 'Select at least', (string) $response->json( 'message' ) );
+
+        $this->assertEqualsWithDelta( $stockBefore, $this->stockOf( $ingredient ), 0.0001 );
+        $this->assertSame( $historyBefore, $this->modifierHistoryCount( $ingredient->id ) );
+        $this->assertEqualsWithDelta( $unitPrice, (float) OrderProduct::query()->whereKey( $saved['id'] )->value( 'unit_price' ), 0.0001 );
+        $this->assertEquals(
+            $rowsBefore,
+            OrderProductModifier::query()
+                ->where( 'order_product_id', $saved['id'] )
+                ->orderBy( 'modifier_id' )
+                ->get( ['modifier_id', 'quantity', 'price', 'stock_applied', 'name'] )
+                ->toArray()
+        );
+    }
+
+    public function test_product_replacement_rejects_modifiers_not_allowed_on_replacement(): void
+    {
+        [$table] = $this->createAvailableTable();
+        [$meal, $mealUnit, $ingredient] = $this->stockedPair();
+        $replacement = Product::query()
+            ->notGrouped()
+            ->notInGroup()
+            ->where( 'stock_management', Product::STOCK_MANAGEMENT_ENABLED )
+            ->whereHas( 'unit_quantities' )
+            ->whereNotIn( 'id', [$meal->id, $ingredient->id] )
+            ->with( 'unit_quantities' )
+            ->first();
+        $this->assertInstanceOf( Product::class, $replacement );
+        $replacementUnit = $this->prepareProduct( $replacement, 100 );
+
+        $allowedGroup = $this->makeGroup( ['min_selections' => 1] );
+        $modifier = $this->makeModifier( $allowedGroup, $ingredient, ['price' => 2] );
+        $this->assignGroup( $meal, $allowedGroup );
+
+        $requiredOnReplacement = $this->makeGroup( [
+            'name' => 'Required on replace ' . Str::random( 4 ),
+            'min_selections' => 1,
+        ] );
+        $this->assignGroup( $replacement, $requiredOnReplacement );
+
+        $selection = [['modifier_id' => $modifier->id, 'quantity' => 1]];
+        $unitPrice = $this->bakedPrice( $mealUnit, 2 );
+        $order = $this->placeOrder( $this->dineInDetails( $table, $this->productLine(
+            $meal,
+            $mealUnit,
+            1,
+            $unitPrice,
+            $selection
+        ) ) );
+
+        $saved = $order['products'][0];
+        $item = OrderItem::query()->where( 'order_id', $order['id'] )->firstOrFail();
+        $this->assertSame( OrderItem::STATUS_PENDING, $item->status );
+        $stockBefore = $this->stockOf( $ingredient );
+        $historyBefore = $this->modifierHistoryCount( $ingredient->id );
+        $modifierRowsBefore = OrderProductModifier::query()
+            ->where( 'order_product_id', $saved['id'] )
+            ->orderBy( 'id' )
+            ->get( ['modifier_id', 'quantity', 'price', 'product_id', 'stock_applied', 'name'] )
+            ->toArray();
+
+        $swapped = $this->savedProductLine(
+            $saved,
+            $selection,
+            (float) $replacementUnit->sale_price_edit + 2,
+            1
+        );
+        $swapped['product_id'] = $replacement->id;
+        $swapped['name'] = $replacement->name;
+        $swapped['unit_quantity_id'] = $replacementUnit->id;
+        $swapped['unit_id'] = $replacementUnit->unit_id;
+
+        $response = $this->resubmit( $order, $swapped, [
+            'type' => ['identifier' => DineInTableService::ORDER_TYPE],
+            DineInTableService::TABLE_FIELD => $table->id,
+        ] );
+        $this->assertSame( 403, $response->status(), (string) $response->getContent() );
+        $message = (string) $response->json( 'message' );
+        $this->assertTrue(
+            str_contains( $message, 'does not belong to an allowed group' )
+            || str_contains( $message, 'Select at least' ),
+            $message
+        );
+
+        $savedProduct = OrderProduct::query()->whereKey( $saved['id'] )->firstOrFail();
+        $this->assertSame( (int) $meal->id, (int) $savedProduct->product_id );
+        $this->assertEqualsWithDelta( $unitPrice, (float) $savedProduct->unit_price, 0.0001 );
+        $this->assertEqualsWithDelta( $stockBefore, $this->stockOf( $ingredient ), 0.0001 );
+        $this->assertSame( $historyBefore, $this->modifierHistoryCount( $ingredient->id ) );
+        $this->assertEquals(
+            $modifierRowsBefore,
+            OrderProductModifier::query()
+                ->where( 'order_product_id', $saved['id'] )
+                ->orderBy( 'id' )
+                ->get( ['modifier_id', 'quantity', 'price', 'product_id', 'stock_applied', 'name'] )
+                ->toArray()
+        );
+
+        $item->refresh();
+        $this->assertSame( OrderItem::STATUS_PENDING, $item->status );
+        $this->assertSame( (int) $saved['id'], (int) $item->order_product_id );
+        $this->assertTrue(
+            OrderItem::query()->where( 'order_id', $order['id'] )->whereKey( $item->id )->exists()
+        );
+    }
+
     public function test_unchanged_selection_keeps_historical_snapshots_after_catalog_changes(): void
     {
         [$meal, $mealUnit, $ingredient] = $this->stockedPair();
