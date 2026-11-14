@@ -1,0 +1,15 @@
+{
+    "exclude": [
+        "Tests/**",
+        "node_modules/**",
+        "vendor/**",
+        ".git/**",
+        ".github/**",
+        ".idea/**",
+        ".vscode/**",
+        ".phpunit.result.cache",
+        "phpunit.xml",
+        "package-lock.json",
+        "*.log"
+    ]
+}

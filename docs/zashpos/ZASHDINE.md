@@ -71,7 +71,7 @@ Pricing (D-017): `unit_price = catalog base + Σ(modifier.price × modifier line
 - Phase 3a: category to kitchen routing, kitchen screen (preparing/ready/rejected), polling
 - Phase 3b: Reverb live updates + waiter-ready notifications (polling fallback retained)
 - Phase 4: modifier groups, POS modifier popup, unit-price surcharge, ingredient stock deltas, protected-meal modifier edits (see Modifiers)
-- Phase 5: manual QA, packaging as an installable zip
+- Phase 5: installable ZIP packaging (`zash-dine:package`), clean Modules-upload install validation, UK receipt/VAT browser checks, kitchen print scope (see Packaging + Receipts below)
 
 ## Test
 ```bash
@@ -102,7 +102,38 @@ npm run report
 
 The host `phpunit.xml` includes a `ZashDine` testsuite (`modules/ZashDine/Tests`), so a plain `php artisan test --compact` run also executes the module tests.
 
+## Packaging (Phase 5)
+
+See [PACKAGING.md](PACKAGING.md). Required core: **ZashPOS 6.3.0+** (`<core min-version="6.3.0" />`). Build with `php artisan zash-dine:package`. Validate Modules upload with `php artisan zash-dine:validate-package-install`.
+
+## Receipts, UK VAT, and kitchen printing
+
+Official guidance used for Phase 5 checks (not legal advice):
+
+- [VAT Notice / charging VAT (GOV.UK)](https://www.gov.uk/charge-reclaim-record-vat) — standard rate **20%** unless a relief applies; VAT-registered businesses charge and record VAT.
+- [VATREC16041 / 16042 — retailers’ invoices (HMRC)](https://www.gov.uk/hmrc-internal-manuals/vat-trader-records/vatrec16041) and [VAT Regulations 1995 reg. 16](https://www.legislation.gov.uk/uksi/1995/2518/regulation/16) — a retailer need not issue a VAT invoice unless a taxable customer requests one; for supplies **≤ £250** a less-detailed invoice may show name/address/VAT number, time of supply, description, total incl. VAT, and per-rate gross + rate.
+- [Where you see VAT (GOV.UK)](https://www.gov.uk/tax-on-shopping/where-you-see-vat) — shelf/till prices for the public are normally VAT-inclusive.
+
+### Browser checks (automated / local)
+
+| Check | How | Evidence |
+| --- | --- | --- |
+| Order tax_value with inclusive flat VAT + modifiers | `ZashDineReceiptVatTest` | PHPUnit |
+| Receipt HTML shows store name, optional VAT No. line, meal name, tax labelling | GET `/dashboard/orders/receipt/{id}` in that test | PHPUnit |
+| Modifier money on bill | Baked into `unit_price` (D-017); receipt shows meal line total | PHPUnit + POS E2E |
+| Waiter → table → modifiers → kitchen → ready → pay, hold/reopen, cancel, stock | Playwright `e2e/` with `E2E_REVERB=1` | Playwright report |
+
+Configure receipt columns under invoice settings (`ns_invoice_receipt_column_a` / `_b`) to include legal name, address, and VAT registration number when the client is VAT-registered. Enable `ns_invoice_display_tax_breakdown` when per-rate lines are needed.
+
+### Hardware / physical checks (not automated)
+
+| Check | Status in Phase 5 |
+| --- | --- |
+| Thermal receipt printer via OS/`window.print` on receipt `?autoprint=true` | **Needs hardware** — browser print dialog only |
+| Kitchen ticket on a physical kitchen printer or KDS tablet | **Needs hardware** — kitchen UI is on-screen; no dedicated ESC/POS driver in ZashDine yet |
+| Tablet touch + print from Floor/Kitchen at venue DPI | **Needs hardware** — viewport E2E covers layout only |
+
 ## Status
-Phase 2c merged (`3b2ac5e2b`). Phase 3a kitchen routing/workflow on `phase-3a-kitchen-routing`. Phase 4 modifiers are implemented on `phase-4-modifiers` and are not merged.
+Phases 0–4 merged to master (Phase 4 merge `3c6dfce9e`). Phase 5 packaging/validation on `phase-5-package-validation` — completion boxes stay unticked until verified.
 
 POS dine-in opens `#zash-dine-table-picker` when the cart has no table yet; reopened/held dine-in orders keep `zash_dine_table_id` and skip the picker. Confirm re-checks `/api/zash-dine/tables/available` before resolve; a race clears the selection, keeps a visible notice while the list refreshes, and requires choosing an available table again. Floor note/cancel use `#zash-dine-note-popup` / `#zash-dine-cancel-meal-popup` and close only after a successful API response (errors stay in the popup). Popup shells are capped to the viewport (`min(36rem, 100vw-2rem)` / `min(80vh, 100vh-2rem)`) so tablet footers stay reachable.
