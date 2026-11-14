@@ -12,6 +12,12 @@ class PackageService
     public const NAMESPACE = 'ZashDine';
 
     /**
+     * Fixed Unix mtime written into every ZIP entry so separate builds
+     * of the same payload produce identical ZIP bytes (D-019).
+     */
+    public const ARCHIVE_MTIME = 946684800; // 2000-01-01 00:00:00 UTC
+
+    /**
      * Paths relative to the module root that must never ship in a client ZIP.
      *
      * @var list<string>
@@ -37,7 +43,9 @@ class PackageService
      *     relative_path: string,
      *     version: string,
      *     core_min_version: string,
+     *     requires_capabilities: list<string>,
      *     sha256: string,
+     *     payload_sha256: string,
      *     file_count: int,
      *     bytes: int
      * }
@@ -55,6 +63,8 @@ class PackageService
         $config = $this->readConfig( $moduleRoot . DIRECTORY_SEPARATOR . 'config.xml' );
         $version = $config['version'];
         $coreMin = $config['core_min_version'];
+
+        app( CoreCompatibilityService::class )->assertCompatible( $coreMin );
 
         $outputDirectory = $outputDirectory
             ? rtrim( $outputDirectory, DIRECTORY_SEPARATOR )
@@ -90,13 +100,18 @@ class PackageService
         foreach ( $entries as $relative => $absolute ) {
             $zipPathInArchive = self::NAMESPACE . '/' . str_replace( '\\', '/', $relative );
             /**
-             * Prefer addFromString so ZIP bytes do not depend on filesystem mtimes
-             * (ZipArchive::setMtimeName is unreliable on Windows).
+             * Prefer addFromString so local filesystem mtimes never enter the archive.
              */
             $zip->addFromString( $zipPathInArchive, (string) file_get_contents( $absolute ) );
         }
 
         $zip->close();
+
+        /**
+         * Patch DOS timestamps in local + central headers. Avoid ZipArchive::setMtime*
+         * on Windows (emits spurious FIND stderr and is unreliable across builds).
+         */
+        $this->normalizeZipEntryTimestamps( $zipPath, self::ARCHIVE_MTIME );
 
         clearstatcache( true, $zipPath );
 
@@ -109,6 +124,7 @@ class PackageService
             'relative_path' => 'storage/app/zashdine-packages/' . $fileName,
             'version' => $version,
             'core_min_version' => $coreMin,
+            'requires_capabilities' => $config['requires_capabilities'],
             'sha256' => hash_file( 'sha256', $zipPath ) ?: '',
             'payload_sha256' => $payloadHash,
             'file_count' => count( $entries ),
@@ -117,7 +133,13 @@ class PackageService
     }
 
     /**
-     * @return array{version: string, core_min_version: string, namespace: string, name: string}
+     * @return array{
+     *     version: string,
+     *     core_min_version: string,
+     *     requires_capabilities: list<string>,
+     *     namespace: string,
+     *     name: string
+     * }
      */
     public function readConfig( string $configPath ): array
     {
@@ -126,10 +148,18 @@ class PackageService
         $version = trim( (string) ( $xml->version ?? '' ) );
         $name = trim( (string) ( $xml->name ?? '' ) );
         $coreMin = '';
+        $requiresCapabilities = [];
 
         if ( isset( $xml->core ) ) {
             $attrs = $xml->core->attributes();
             $coreMin = trim( (string) ( $attrs['min-version'] ?? '' ) );
+            $rawCapabilities = trim( (string) ( $attrs['requires-capabilities'] ?? '' ) );
+            if ( $rawCapabilities !== '' ) {
+                $requiresCapabilities = array_values( array_filter( array_map(
+                    static fn ( string $capability ): string => trim( $capability ),
+                    explode( ',', $rawCapabilities )
+                ) ) );
+            }
         }
 
         if ( $namespace !== self::NAMESPACE || $version === '' || $name === '' ) {
@@ -144,11 +174,18 @@ class PackageService
             );
         }
 
+        if ( $requiresCapabilities === [] ) {
+            throw new NotAllowedException(
+                __m( 'ZashDine config.xml must declare requires-capabilities (ZashPOS fork hooks).', 'ZashDine' )
+            );
+        }
+
         return [
             'namespace' => $namespace,
             'name' => $name,
             'version' => $version,
             'core_min_version' => $coreMin,
+            'requires_capabilities' => $requiresCapabilities,
         ];
     }
 
@@ -185,6 +222,86 @@ class PackageService
         ksort( $entries, SORT_STRING );
 
         return $entries;
+    }
+
+    /**
+     * Rewrite every ZIP entry's DOS mtime to a fixed value for byte-identical rebuilds.
+     * Walks the central directory (not raw payload bytes) so compressed data cannot false-match.
+     */
+    protected function normalizeZipEntryTimestamps( string $zipPath, int $unixMtime ): void
+    {
+        $dos = $this->unixToDosTime( $unixMtime );
+        $binary = file_get_contents( $zipPath );
+
+        if ( $binary === false || strlen( $binary ) < 22 ) {
+            throw new NotAllowedException(
+                __m( 'Unable to read ZashDine package ZIP for timestamp normalization.', 'ZashDine' )
+            );
+        }
+
+        $eocd = strrpos( $binary, "\x50\x4b\x05\x06" );
+        if ( $eocd === false ) {
+            throw new NotAllowedException(
+                __m( 'ZashDine package ZIP is missing an end-of-central-directory record.', 'ZashDine' )
+            );
+        }
+
+        $totalEntries = unpack( 'v', substr( $binary, $eocd + 10, 2 ) )[1];
+        $centralOffset = unpack( 'V', substr( $binary, $eocd + 16, 4 ) )[1];
+        $offset = $centralOffset;
+        $patched = 0;
+
+        for ( $i = 0; $i < $totalEntries; $i++ ) {
+            if ( substr( $binary, $offset, 4 ) !== "\x50\x4b\x01\x02" ) {
+                throw new NotAllowedException(
+                    __m( 'ZashDine package ZIP central directory is corrupt during timestamp normalization.', 'ZashDine' )
+                );
+            }
+
+            $binary = substr_replace( $binary, $dos, $offset + 12, 4 );
+
+            $nameLen = unpack( 'v', substr( $binary, $offset + 28, 2 ) )[1];
+            $extraLen = unpack( 'v', substr( $binary, $offset + 30, 2 ) )[1];
+            $commentLen = unpack( 'v', substr( $binary, $offset + 32, 2 ) )[1];
+            $localOffset = unpack( 'V', substr( $binary, $offset + 42, 4 ) )[1];
+
+            if ( substr( $binary, $localOffset, 4 ) === "\x50\x4b\x03\x04" ) {
+                $binary = substr_replace( $binary, $dos, $localOffset + 10, 4 );
+            }
+
+            $offset += 46 + $nameLen + $extraLen + $commentLen;
+            $patched++;
+        }
+
+        if ( $patched < 1 ) {
+            throw new NotAllowedException(
+                __m( 'Unable to normalize ZIP entry timestamps for a reproducible package.', 'ZashDine' )
+            );
+        }
+
+        if ( file_put_contents( $zipPath, $binary ) === false ) {
+            throw new NotAllowedException(
+                __m( 'Unable to write normalized ZashDine package ZIP.', 'ZashDine' )
+            );
+        }
+    }
+
+    /**
+     * Pack a Unix timestamp as little-endian DOS time + DOS date (4 bytes).
+     */
+    protected function unixToDosTime( int $unixMtime ): string
+    {
+        $parts = getdate( $unixMtime );
+        $year = max( 1980, (int) $parts['year'] );
+
+        $dosTime = ( (int) $parts['hours'] << 11 )
+            | ( (int) $parts['minutes'] << 5 )
+            | ( ( (int) $parts['seconds'] ) >> 1 );
+        $dosDate = ( ( $year - 1980 ) << 9 )
+            | ( (int) $parts['mon'] << 5 )
+            | (int) $parts['mday'];
+
+        return pack( 'v', $dosTime ) . pack( 'v', $dosDate );
     }
 
     /**

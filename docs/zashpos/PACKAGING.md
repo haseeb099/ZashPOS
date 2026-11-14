@@ -1,15 +1,17 @@
 # ZashDine packaging and clean install (Phase 5)
 
-## Required core version
+## Required host (not stock NexoPOS alone)
 
 | Requirement | Value |
 | --- | --- |
-| ZashPOS / NexoPOS core | **6.3.0** or newer (`config/nexopos.php` → `version`) |
-| Declared in module | `modules/ZashDine/config.xml` → `<core min-version="6.3.0" />` |
+| Numeric core | **6.3.0** or newer (`config/nexopos.php` → `version`) |
+| Host | **haseeb099/ZashPOS** (or equivalent fork) **after Phase 4** — ships modifier-price + cart-merge hooks |
+| Declared capabilities | `order-product-canonical-unit-price`, `pos-cart-products-mergeable` in `config/nexopos.php` → `capabilities` |
+| Declared in module | `config.xml` → `<core min-version="6.3.0" requires-capabilities="…" />` |
 | PHP | 8.4+ (CI/local also run on 8.5) |
 | Laravel | 12.x |
 
-The Modules UI refuses to enable ZashDine when `config('nexopos.version')` is below that minimum.
+Enable is refused when the numeric version is too low **or** when any required capability is missing from `config('nexopos.capabilities')`. Stock upstream NexoPOS 6.3.0 does **not** provide those capabilities.
 
 ## Build the installable ZIP
 
@@ -25,33 +27,34 @@ Output:
 
 - `storage/app/zashdine-packages/ZashDine-{version}.zip`
 - SHA-256 printed on the console
-- Same source tree → same SHA-256 (stable ZIP entry order + fixed entry mtimes)
+- Same source tree → same ZIP SHA-256 (stable entry order + `PackageService::ARCHIVE_MTIME` on every entry; PHPUnit rebuilds at different wall-clock times and compares `sha256`, not only `payload_sha256`)
 
 Excluded from the client ZIP (`manifest.json` + `PackageService` defaults): `Tests/**`, `node_modules/**`, `vendor/**`, VCS/editor junk.
 
 ## Install on a clean ZashPOS
 
-1. Fresh ZashPOS **6.3.0+** with its **own** `vendor/` (`composer install`), **own** `.env`, and **own** database (SQLite or MySQL).
+1. Fresh **ZashPOS** host that declares the required capabilities (Phase 4+), with its **own** `vendor/` (`composer install`), **own** `.env`, and **own** database (SQLite or MySQL).
 2. Do **not** copy `modules/ZashDine` from git if you are validating the Modules upload path — remove it first.
 3. Dashboard → Modules → Upload → choose `ZashDine-1.0.0.zip`.
 4. Enable ZashDine; migrations run on upload and again via `php artisan modules:migrate ZashDine --force`.
 5. Confirm permissions `zash.dine.manage` / `waiter` / `chef`, tables `zash_dine_*`, and Blade assets under `modules/ZashDine/Resources/Views/`.
 
-Automated same-tree upload path (moves the module aside, uploads the ZIP, verifies, restores on failure):
+Automated same-tree upload path (moves the module aside, uploads the ZIP, verifies, **restores the complete original directory on any failure** — including after a partial upload):
 
 ```powershell
 php artisan zash-dine:validate-package-install --no-interaction
+# restore regression: --force-fail-after=upload
 ```
 
 Evidence: `storage/logs/phase5-package-install.json`.
 
-Optional second machine / directory with a real `composer install` (slow):
+Optional second machine / directory with a real `composer install` (slow). The script runs **`ns:setup` on an empty SQLite file** (never copies `tests/database.sqlite`), asserts ZashDine tables/permissions/migration rows are **absent before** upload, and **fails** on every missing post-install requirement:
 
 ```powershell
 .\scripts\validate-zashdine-clean-install.ps1
 ```
 
-Evidence: `storage/logs/phase5-clean-install.txt`.
+Evidence: `storage/logs/phase5-clean-install.txt` and the clean tree’s `storage/logs/phase5-clean-verify.json`.
 
 ## What “built assets” means for ZashDine
 

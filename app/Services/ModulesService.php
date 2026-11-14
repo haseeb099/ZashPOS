@@ -183,10 +183,12 @@ class ModulesService
                 $attributes = $xmlElement->core[0]->attributes();
                 $minVersion = 'min-version';
                 $maxVersion = 'max-version';
+                $requiresCapabilities = 'requires-capabilities';
 
                 $config[ 'core' ] = [
                     'min-version' => ( (string) $attributes->$minVersion ) ?? null,
                     'max-version' => ( (string) $attributes->$maxVersion ) ?? null,
+                    'requires-capabilities' => trim( (string) ( $attributes->$requiresCapabilities ?? '' ) ),
                 ];
             }
 
@@ -506,7 +508,41 @@ class ModulesService
                     )
                 ) );
             }
+
+            $requiredCapabilities = $this->parseRequiredCapabilities( $module );
+            if ( $requiredCapabilities !== [] ) {
+                $available = config( 'nexopos.capabilities', [] );
+                $available = is_array( $available ) ? $available : [];
+                $missingCapabilities = array_values( array_diff( $requiredCapabilities, $available ) );
+
+                if ( $missingCapabilities !== [] ) {
+                    $this->disable( $module[ 'namespace' ] );
+
+                    throw new ModuleVersionMismatchException( sprintf(
+                        __( 'The module "%s" has been disabled: missing ZashPOS capabilities (%s).' ),
+                        $module[ 'name' ],
+                        implode( ', ', $missingCapabilities )
+                    ) );
+                }
+            }
         }
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function parseRequiredCapabilities( array $module ): array
+    {
+        $raw = trim( (string) ( $module[ 'core' ][ 'requires-capabilities' ] ?? '' ) );
+
+        if ( $raw === '' ) {
+            return [];
+        }
+
+        return array_values( array_filter( array_map(
+            static fn ( string $capability ): string => trim( $capability ),
+            explode( ',', $raw )
+        ) ) );
     }
 
     /**
@@ -1529,6 +1565,25 @@ class ModulesService
                         config( 'nexopos.version' )
                     ),
                 ], 403 );
+            }
+
+            $requiredCapabilities = $this->parseRequiredCapabilities( $module );
+            if ( $requiredCapabilities !== [] ) {
+                $available = config( 'nexopos.capabilities', [] );
+                $available = is_array( $available ) ? $available : [];
+                $missingCapabilities = array_values( array_diff( $requiredCapabilities, $available ) );
+
+                if ( $missingCapabilities !== [] ) {
+                    return response()->json( [
+                        'status' => 'error',
+                        'code' => 'capability_mismatch',
+                        'message' => sprintf(
+                            __( 'The module "%s" cannot be enabled: this host is missing required ZashPOS capabilities (%s). Numeric NexoPOS version alone is not enough — use a ZashPOS build that declares them in config/nexopos.php.' ),
+                            $module[ 'name' ],
+                            implode( ', ', $missingCapabilities )
+                        ),
+                    ], 403 );
+                }
             }
 
             /**

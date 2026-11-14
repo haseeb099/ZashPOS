@@ -8,6 +8,7 @@ use Illuminate\Console\Command;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Schema;
+use Modules\ZashDine\Services\CoreCompatibilityService;
 use Modules\ZashDine\Services\PackageService;
 
 /**
@@ -17,11 +18,12 @@ use Modules\ZashDine\Services\PackageService;
 class ValidateZashDinePackageInstallCommand extends Command
 {
     protected $signature = 'zash-dine:validate-package-install
-                            {--keep-backup : Leave modules/ZashDine.bak in place on failure}';
+                            {--keep-backup : Leave modules/ZashDine.bak in place on failure}
+                            {--force-fail-after= : Intentionally fail after upload|migrate|enable (restore regression)}';
 
     protected $description = 'Validate ZashDine ZIP install through ModulesService (package upload path)';
 
-    public function handle( PackageService $packages, ModulesService $modules ): int
+    public function handle( PackageService $packages, ModulesService $modules, CoreCompatibilityService $compatibility ): int
     {
         $modulePath = base_path( 'modules/ZashDine' );
         // Outside modules/ so discovery does not pick up the backup folder.
@@ -38,6 +40,18 @@ class ValidateZashDinePackageInstallCommand extends Command
             $this->error( 'Database is not an installed ZashPOS schema (missing nexopos_modules_migrations). Refusing to move the module aside.' );
             $report['status'] = 'failed';
             $report['error'] = 'missing nexopos_modules_migrations';
+            File::put( $evidence, json_encode( $report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
+
+            return self::FAILURE;
+        }
+
+        try {
+            $compatibility->assertCompatible();
+            $report['steps'][] = 'host_compatible';
+        } catch ( \Throwable $e ) {
+            $this->error( $e->getMessage() );
+            $report['status'] = 'failed';
+            $report['error'] = $e->getMessage();
             File::put( $evidence, json_encode( $report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
 
             return self::FAILURE;
@@ -74,10 +88,12 @@ class ValidateZashDinePackageInstallCommand extends Command
             }
 
             $report['steps'][] = 'uploaded';
+            $this->maybeForceFail( 'upload' );
 
             $migrate = $modules->runAllMigration( 'ZashDine' );
             $report['migrate'] = $migrate;
             $report['steps'][] = 'migrated';
+            $this->maybeForceFail( 'migrate' );
 
             $enable = $modules->enable( 'ZashDine' );
             if ( is_object( $enable ) && method_exists( $enable, 'getData' ) ) {
@@ -85,6 +101,7 @@ class ValidateZashDinePackageInstallCommand extends Command
             }
             $report['enable'] = $enable;
             $report['steps'][] = 'enabled';
+            $this->maybeForceFail( 'enable' );
 
             $modules->load();
             $module = $modules->get( 'ZashDine' );
@@ -123,6 +140,7 @@ class ValidateZashDinePackageInstallCommand extends Command
                 'enabled' => (bool) ( $module['enabled'] ?? false ),
                 'version' => $module['version'] ?? null,
                 'core_min_version' => $module['core']['min-version'] ?? null,
+                'requires_capabilities' => $module['core']['requires-capabilities'] ?? null,
                 'permissions' => $permissions,
                 'tables' => $tables,
                 'assets' => $assets,
@@ -171,11 +189,11 @@ class ValidateZashDinePackageInstallCommand extends Command
             $report['finished_at'] = now()->toIso8601String();
             File::put( $evidence, json_encode( $report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
 
-            if ( ! is_dir( $modulePath ) && is_dir( $backupPath ) ) {
-                File::copyDirectory( $backupPath, $modulePath );
-                File::deleteDirectory( $backupPath );
-                $this->warn( 'Restored modules/ZashDine from backup after failure.' );
+            $restored = $this->restoreModuleFromBackup( $modulePath, $backupPath );
+            if ( $restored ) {
+                $this->warn( 'Restored complete modules/ZashDine from backup after failure.' );
             } elseif ( ! $this->option( 'keep-backup' ) && is_dir( $backupPath ) ) {
+                // Only discard backup when restore was not needed (destination already intact).
                 File::deleteDirectory( $backupPath );
             }
 
@@ -183,6 +201,37 @@ class ValidateZashDinePackageInstallCommand extends Command
             $this->line( 'Evidence: ' . $evidence );
 
             return self::FAILURE;
+        }
+    }
+
+    /**
+     * Always replace a missing or partial destination with the complete backup.
+     */
+    public function restoreModuleFromBackup( string $modulePath, string $backupPath ): bool
+    {
+        if ( ! is_dir( $backupPath ) ) {
+            return false;
+        }
+
+        if ( is_dir( $modulePath ) ) {
+            File::deleteDirectory( $modulePath );
+        }
+
+        File::copyDirectory( $backupPath, $modulePath );
+
+        if ( ! $this->option( 'keep-backup' ) ) {
+            File::deleteDirectory( $backupPath );
+        }
+
+        return true;
+    }
+
+    private function maybeForceFail( string $step ): void
+    {
+        $forced = (string) $this->option( 'force-fail-after' );
+
+        if ( $forced !== '' && $forced === $step ) {
+            throw new \RuntimeException( 'Forced failure after ' . $step . ' for restore regression.' );
         }
     }
 

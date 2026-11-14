@@ -6,8 +6,10 @@ use App\Models\Permission;
 use App\Services\ModulesService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Schema;
+use Modules\ZashDine\Services\CoreCompatibilityService;
 use Modules\ZashDine\Services\PackageService;
 use ReflectionClass;
 use Tests\TestCase;
@@ -20,23 +22,7 @@ final class ZashDinePackageTest extends TestCase
 
     protected function tearDown(): void
     {
-        $modulePath = base_path( 'modules/ZashDine' );
-        $backupPath = storage_path( 'app/zashdine-bak-phpunit' );
-
-        if ( ! is_dir( $modulePath ) && is_dir( $backupPath ) ) {
-            File::copyDirectory( $backupPath, $modulePath );
-        }
-
-        if (
-            is_dir( $modulePath )
-            && ! is_dir( $modulePath . DIRECTORY_SEPARATOR . 'Tests' )
-            && is_dir( $backupPath . DIRECTORY_SEPARATOR . 'Tests' )
-        ) {
-            File::copyDirectory(
-                $backupPath . DIRECTORY_SEPARATOR . 'Tests',
-                $modulePath . DIRECTORY_SEPARATOR . 'Tests'
-            );
-        }
+        $this->restoreModuleBackupIfPresent();
 
         parent::tearDown();
     }
@@ -47,14 +33,33 @@ final class ZashDinePackageTest extends TestCase
 
         /** @var PackageService $packages */
         $packages = app( PackageService::class );
-        $outputDirectory = storage_path( 'app/zashdine-packages-test' );
+        $firstDirectory = storage_path( 'app/zashdine-packages-test-a' );
+        $secondDirectory = storage_path( 'app/zashdine-packages-test-b' );
 
-        $first = $packages->build( $outputDirectory );
-        $second = $packages->build( $outputDirectory );
+        File::deleteDirectory( $firstDirectory );
+        File::deleteDirectory( $secondDirectory );
+        File::ensureDirectoryExists( $firstDirectory );
+        File::ensureDirectoryExists( $secondDirectory );
+
+        $first = $packages->build( $firstDirectory );
+
+        // Separate builds at different wall-clock times must still match ZIP bytes.
+        sleep( 2 );
+        $second = $packages->build( $secondDirectory );
 
         $this->assertSame( $first['payload_sha256'], $second['payload_sha256'] );
+        $this->assertNotSame( '', $first['sha256'] );
+        $this->assertSame(
+            $first['sha256'],
+            $second['sha256'],
+            'ZIP sha256 must be identical across timed rebuilds (normalized archive metadata).'
+        );
         $this->assertSame( '1.0.0', $first['version'] );
         $this->assertSame( '6.3.0', $first['core_min_version'] );
+        $this->assertEqualsCanonicalizing(
+            CoreCompatibilityService::REQUIRED_CAPABILITIES,
+            $first['requires_capabilities']
+        );
 
         $zip = new ZipArchive;
         $this->assertTrue( $zip->open( $first['path'] ) );
@@ -62,6 +67,12 @@ final class ZashDinePackageTest extends TestCase
         $names = [];
         for ( $i = 0; $i < $zip->numFiles; $i++ ) {
             $names[] = (string) $zip->getNameIndex( $i );
+            $stat = $zip->statIndex( $i );
+            $this->assertSame(
+                PackageService::ARCHIVE_MTIME,
+                (int) ( $stat['mtime'] ?? 0 ),
+                'ZIP entry mtime must be normalized: ' . ( $names[$i] ?? $i )
+            );
         }
         $zip->close();
 
@@ -70,6 +81,7 @@ final class ZashDinePackageTest extends TestCase
             'ZashDine/manifest.json',
             'ZashDine/Resources/Views/pos-script.blade.php',
             'ZashDine/Migrations/2026_11_03_200001_create_zash_dine_permissions.php',
+            'ZashDine/Services/CoreCompatibilityService.php',
         ] as $required ) {
             $this->assertContains( $required, $names, 'ZIP must contain ' . $required );
         }
@@ -82,6 +94,22 @@ final class ZashDinePackageTest extends TestCase
                 'Client ZIP must exclude module tests: ' . $name
             );
         }
+    }
+
+    public function test_host_without_required_capabilities_is_rejected(): void
+    {
+        $this->attemptAuthenticate();
+
+        config( ['nexopos.capabilities' => []] );
+
+        $compatibility = app( CoreCompatibilityService::class );
+        $this->assertSame(
+            CoreCompatibilityService::REQUIRED_CAPABILITIES,
+            $compatibility->missingDeclaredCapabilities()
+        );
+
+        $this->expectException( \App\Exceptions\NotAllowedException::class );
+        $compatibility->assertCompatible();
     }
 
     public function test_package_upload_installs_migrations_permissions_and_assets(): void
@@ -171,18 +199,45 @@ final class ZashDinePackageTest extends TestCase
                 $this->assertFileExists( $modulePath . DIRECTORY_SEPARATOR . str_replace( '/', DIRECTORY_SEPARATOR, $relative ) );
             }
         } finally {
-            if ( is_dir( $backupPath . DIRECTORY_SEPARATOR . 'Tests' ) ) {
-                File::ensureDirectoryExists( $modulePath . DIRECTORY_SEPARATOR . 'Tests' );
-                File::copyDirectory(
-                    $backupPath . DIRECTORY_SEPARATOR . 'Tests',
-                    $modulePath . DIRECTORY_SEPARATOR . 'Tests'
-                );
-            }
-
-            if ( is_dir( $backupPath ) ) {
-                File::deleteDirectory( $backupPath );
-            }
+            $this->restoreModuleBackupIfPresent( $backupPath );
         }
+    }
+
+    public function test_forced_failure_after_upload_restores_complete_original_module(): void
+    {
+        $this->attemptAuthenticate();
+
+        $modulePath = base_path( 'modules/ZashDine' );
+        $marker = $modulePath . DIRECTORY_SEPARATOR . 'Tests' . DIRECTORY_SEPARATOR . 'Feature' . DIRECTORY_SEPARATOR . 'ZashDinePackageTest.php';
+        $this->assertFileExists( $marker, 'Precondition: original module includes Tests.' );
+
+        $exit = Artisan::call( 'zash-dine:validate-package-install', [
+            '--force-fail-after' => 'upload',
+            '--no-interaction' => true,
+        ] );
+
+        $this->assertSame( 1, $exit, Artisan::output() );
+        $this->assertDirectoryExists( $modulePath );
+        $this->assertFileExists( $marker, 'Forced failure must restore the complete original module, including Tests.' );
+        $this->assertFileExists( $modulePath . DIRECTORY_SEPARATOR . 'config.xml' );
+        $this->assertDirectoryDoesNotExist( storage_path( 'app/zashdine-bak-validate' ) );
+    }
+
+    private function restoreModuleBackupIfPresent( ?string $backupPath = null ): void
+    {
+        $modulePath = base_path( 'modules/ZashDine' );
+        $backupPath = $backupPath ?? storage_path( 'app/zashdine-bak-phpunit' );
+
+        if ( ! is_dir( $backupPath ) ) {
+            return;
+        }
+
+        if ( is_dir( $modulePath ) ) {
+            File::deleteDirectory( $modulePath );
+        }
+
+        File::copyDirectory( $backupPath, $modulePath );
+        File::deleteDirectory( $backupPath );
     }
 
     private function forgetModule( ModulesService $modules, string $namespace ): void

@@ -139,6 +139,10 @@ class ZashDineServiceProvider extends ServiceProvider
 
             return app( ModifierService::class )->adjustCanonicalUnitPrice( $price, $product );
         }, 20, 3 );
+
+        Hook::addFilter( 'ns-receipt-product-name', function ( $html, $product ) {
+            return app( ModifierService::class )->appendModifiersToReceiptProductName( $html, $product );
+        }, 20, 2 );
     }
 
     public function boot(): void

@@ -104,7 +104,7 @@ The host `phpunit.xml` includes a `ZashDine` testsuite (`modules/ZashDine/Tests`
 
 ## Packaging (Phase 5)
 
-See [PACKAGING.md](PACKAGING.md). Required core: **ZashPOS 6.3.0+** (`<core min-version="6.3.0" />`). Build with `php artisan zash-dine:package`. Validate Modules upload with `php artisan zash-dine:validate-package-install`.
+See [PACKAGING.md](PACKAGING.md). Required host: **haseeb099/ZashPOS after Phase 4** (numeric **6.3.0+** plus capabilities `order-product-canonical-unit-price` and `pos-cart-products-mergeable` — not stock NexoPOS alone). Build with `php artisan zash-dine:package`. Validate Modules upload with `php artisan zash-dine:validate-package-install`.
 
 ## Receipts, UK VAT, and kitchen printing
 
@@ -118,9 +118,9 @@ Official guidance used for Phase 5 checks (not legal advice):
 
 | Check | How | Evidence |
 | --- | --- | --- |
-| Order tax_value with inclusive flat VAT + modifiers | `ZashDineReceiptVatTest` | PHPUnit |
-| Receipt HTML shows store name, optional VAT No. line, meal name, tax labelling | GET `/dashboard/orders/receipt/{id}` in that test | PHPUnit |
-| Modifier money on bill | Baked into `unit_price` (D-017); receipt shows meal line total | PHPUnit + POS E2E |
+| Deterministic exclusive **and** inclusive flat VAT with modifiers × meal qty | `ZashDineReceiptVatTest` vs `TaxService::getVatValue` | PHPUnit |
+| Receipt HTML: store name, VAT No., meal name, **modifier name**, Inclusive/Exclusive label, formatted tax + total | GET `/dashboard/orders/receipt/{id}` (`ns-receipt-product-name`) | PHPUnit |
+| Modifier money on bill | Baked into `unit_price` (D-017); receipt line total matches baked price × qty | PHPUnit + POS E2E |
 | Waiter → table → modifiers → kitchen → ready → pay, hold/reopen, cancel, stock | Playwright `e2e/` with `E2E_REVERB=1` | Playwright report |
 
 Configure receipt columns under invoice settings (`ns_invoice_receipt_column_a` / `_b`) to include legal name, address, and VAT registration number when the client is VAT-registered. Enable `ns_invoice_display_tax_breakdown` when per-rate lines are needed.

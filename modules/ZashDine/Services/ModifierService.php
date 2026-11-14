@@ -451,6 +451,72 @@ class ModifierService
     }
 
     /**
+     * Append saved modifier names under the receipt product label.
+     *
+     * Receipt `combinedProducts` may be stdClass rows with `id` removed when
+     * `ns_invoice_merge_similar_products` is enabled — fall back to order/product keys.
+     */
+    public function appendModifiersToReceiptProductName( string $html, mixed $product ): string
+    {
+        if ( ! Schema::hasTable( 'zash_dine_order_product_modifiers' ) ) {
+            return $html;
+        }
+
+        $lines = [];
+
+        if ( is_object( $product ) && isset( $product->zash_dine_modifiers ) && is_array( $product->zash_dine_modifiers ) ) {
+            $lines = $product->zash_dine_modifiers;
+        } elseif ( is_object( $product ) ) {
+            $orderProductIds = [];
+
+            if ( isset( $product->id ) && is_numeric( $product->id ) ) {
+                $orderProductIds[] = (int) $product->id;
+            } elseif (
+                isset( $product->order_id, $product->product_id )
+                && is_numeric( $product->order_id )
+                && is_numeric( $product->product_id )
+            ) {
+                $orderProductIds = OrderProduct::query()
+                    ->where( 'order_id', (int) $product->order_id )
+                    ->where( 'product_id', (int) $product->product_id )
+                    ->pluck( 'id' )
+                    ->map( fn ( $id ) => (int) $id )
+                    ->all();
+            }
+
+            if ( $orderProductIds !== [] ) {
+                $lines = OrderProductModifier::query()
+                    ->whereIn( 'order_product_id', $orderProductIds )
+                    ->orderBy( 'id' )
+                    ->get()
+                    ->map( fn ( OrderProductModifier $row ) => [
+                        'name' => $row->name,
+                        'quantity' => (float) $row->quantity,
+                    ] )
+                    ->all();
+            }
+        }
+
+        $labels = [];
+        foreach ( $lines as $line ) {
+            $name = trim( (string) ( $line['name'] ?? '' ) );
+            if ( $name === '' ) {
+                continue;
+            }
+            $qty = (float) ( $line['quantity'] ?? 1 );
+            $labels[] = $qty > 1
+                ? sprintf( '%s ×%s', $name, rtrim( rtrim( number_format( $qty, 2, '.', '' ), '0' ), '.' ) )
+                : $name;
+        }
+
+        if ( $labels === [] ) {
+            return $html;
+        }
+
+        return $html . '<div class="text-xs">' . e( implode( ', ', $labels ) ) . '</div>';
+    }
+
+    /**
      * @return list<array<string, mixed>>
      */
     public function groupsForProduct( Product $product ): array
