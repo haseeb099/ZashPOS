@@ -8,11 +8,14 @@ use App\Http\Middleware\CheckMigrationStatus;
 use App\Models\Customer;
 use App\Models\Order;
 use App\Models\OrderPayment;
+use App\Models\OrderProduct;
 use App\Models\Product;
+use App\Models\ProductHistory;
 use App\Models\ProductUnitQuantity;
 use App\Models\Role;
 use App\Models\Tax;
 use App\Models\TaxGroup;
+use App\Models\User;
 use App\Services\ModulesService;
 use Illuminate\Foundation\Events\DiscoverEvents;
 use Illuminate\Http\JsonResponse;
@@ -153,18 +156,111 @@ final class ZashDineReceiptVatTest extends TestCase
     {
         ns()->option->set( 'ns_orders_allow_partial', 'no' );
 
-        $built = $this->buildExclusiveTwentyPercentCart();
-
         try {
-            $this->processOrders( array_merge( $built['order'], [
+            $built = $this->buildExclusiveTwentyPercentCart();
+            $line = $built['order']['products'][0];
+            $unitPrice = (float) $line['unit_price'];
+            $quantity = (float) $line['quantity'];
+            $lineTotal = $unitPrice * $quantity;
+            $this->assertEqualsWithDelta( 20.0, $lineTotal, 0.0001 );
+            $this->assertEqualsWithDelta( 24.0, $lineTotal * ( 1 + ( self::VAT_RATE / 100 ) ), 0.0001 );
+
+            $mealId = (int) $line['product_id'];
+            $mealUnitId = (int) $line['unit_id'];
+            $modifierId = (int) $line['zash_dine_modifiers'][0]['modifier_id'];
+            $ingredientId = (int) Modifier::query()->whereKey( $modifierId )->value( 'product_id' );
+            $this->assertGreaterThan( 0, $ingredientId );
+
+            $ingredientUnitId = (int) ProductUnitQuantity::query()
+                ->where( 'product_id', $ingredientId )
+                ->value( 'unit_id' );
+
+            $ordersBefore = Order::query()->count();
+            $orderProductsBefore = OrderProduct::query()->count();
+            $paymentsBefore = OrderPayment::query()->count();
+            $modifiersBefore = OrderProductModifier::query()->count();
+            $mealQtyBefore = (float) ProductUnitQuantity::query()
+                ->where( 'product_id', $mealId )
+                ->where( 'unit_id', $mealUnitId )
+                ->value( 'quantity' );
+            $ingredientQtyBefore = (float) ProductUnitQuantity::query()
+                ->where( 'product_id', $ingredientId )
+                ->where( 'unit_id', $ingredientUnitId )
+                ->value( 'quantity' );
+            $mealHistoryBefore = ProductHistory::query()->where( 'product_id', $mealId )->count();
+            $ingredientHistoryBefore = ProductHistory::query()->where( 'product_id', $ingredientId )->count();
+
+            $payload = array_merge( $built['order'], [
+                'type' => ['identifier' => 'takeaway'],
+                'discount_type' => 'percentage',
+                'discount_percentage' => 0,
+                'discount' => 0,
+                'total_coupons' => 0,
+                'subtotal' => $lineTotal,
+                'shipping' => 0,
+                'author_id' => auth()->id() ?? User::query()->value( 'id' ),
+                'addresses' => [
+                    'shipping' => [
+                        'first_name' => 'VAT',
+                        'last_name' => 'Reject',
+                        'country' => 'GB',
+                    ],
+                    'billing' => [
+                        'first_name' => 'VAT',
+                        'last_name' => 'Reject',
+                        'country' => 'GB',
+                    ],
+                ],
+                'products' => [array_merge( $line, [
+                    'total_price' => $lineTotal,
+                ])],
                 'payments' => [[
                     'identifier' => OrderPayment::PAYMENT_CASH,
                     'value' => 20.0,
                 ]],
-            ] ) );
-            $this->fail( 'Expected underpayment against exclusive VAT payable to be rejected when partial payments are disabled.' );
-        } catch ( \Throwable $e ) {
-            $this->assertStringContainsStringIgnoringCase( 'partial', $e->getMessage() );
+            ] );
+
+            $response = $this->json( 'POST', 'api/orders', $payload );
+
+            $response->assertStatus( 403 );
+            $response->assertJsonPath( 'status', 'error' );
+            $response->assertJsonPath(
+                'message',
+                "Unable to proceed. Partially paid orders aren't allowed. This option could be changed on the settings."
+            );
+
+            $this->assertSame( $ordersBefore, Order::query()->count(), 'Rejected underpayment must not create an order.' );
+            $this->assertSame( $orderProductsBefore, OrderProduct::query()->count(), 'Rejected underpayment must not create order products.' );
+            $this->assertSame( $paymentsBefore, OrderPayment::query()->count(), 'Rejected underpayment must not create payments.' );
+            $this->assertSame( $modifiersBefore, OrderProductModifier::query()->count(), 'Rejected underpayment must not create modifier rows.' );
+            $this->assertEqualsWithDelta(
+                $mealQtyBefore,
+                (float) ProductUnitQuantity::query()
+                    ->where( 'product_id', $mealId )
+                    ->where( 'unit_id', $mealUnitId )
+                    ->value( 'quantity' ),
+                0.0001,
+                'Rejected underpayment must not change meal stock.'
+            );
+            $this->assertEqualsWithDelta(
+                $ingredientQtyBefore,
+                (float) ProductUnitQuantity::query()
+                    ->where( 'product_id', $ingredientId )
+                    ->where( 'unit_id', $ingredientUnitId )
+                    ->value( 'quantity' ),
+                0.0001,
+                'Rejected underpayment must not change modifier ingredient stock.'
+            );
+            $this->assertSame(
+                $mealHistoryBefore,
+                ProductHistory::query()->where( 'product_id', $mealId )->count(),
+                'Rejected underpayment must not write meal stock history.'
+            );
+            $this->assertSame(
+                $ingredientHistoryBefore,
+                ProductHistory::query()->where( 'product_id', $ingredientId )->count(),
+                'Rejected underpayment must not write modifier stock history.'
+            );
         } finally {
             ns()->option->set( 'ns_orders_allow_partial', 'yes' );
         }
