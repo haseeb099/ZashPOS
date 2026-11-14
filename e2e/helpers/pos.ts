@@ -601,25 +601,28 @@ export async function deleteOrderFromList(page: Page, code: string): Promise<voi
         await expect(row).toBeVisible({ timeout: 30000 });
 
         /**
-         * CRUD Options opens an animated menu behind a full-page toggle overlay
-         * (ns-table-row). Playwright actionability then sees the menuitem as
-         * unstable/detached — same flake areas-tables already force-clicks past.
-         * This is selector/timing, not an order-delete API regression.
+         * Diagnosis: ns-table-row toggleMenu() repositions the menu after 100ms
+         * (absolute top/left). Playwright then sees the Delete menuitem as
+         * "not stable" / detached during that animation — not an order-delete API
+         * bug. Assert visibility first (real find), then force-click past the
+         * settle race (same pattern as areas-tables). Confirm remains a normal click.
          */
+        await page.locator('#guide-popup, .ns-guide').getByRole('button', { name: /Dismiss|Close|Skip/i }).click({ timeout: 2000 }).catch(() => undefined);
         await row.getByRole('button', { name: 'Options' }).click();
-        const deleteItem = row.locator('.ns-menu-wrapper [role="menuitem"]').filter({ hasText: /Delete/i }).first();
+        const deleteItem = row.getByRole('menuitem').filter({ hasText: /Delete/i }).first();
         await expect(deleteItem).toBeVisible({ timeout: 10000 });
 
         const deleted = page.waitForResponse((response) => (
             response.request().method() === 'DELETE'
             && response.url().includes('/api/')
-            && response.ok()
         ), { timeout: 30000 });
 
         await deleteItem.click({ force: true });
-        await page.locator('#confirm-popup').getByRole('button', { name: 'Yes' }).click();
+        const confirm = page.locator('#confirm-popup');
+        await expect(confirm).toBeVisible({ timeout: 10000 });
+        await confirm.getByRole('button', { name: 'Yes' }).click();
         const deleteResponse = await deleted;
-        expect(deleteResponse.ok(), `order delete HTTP ${deleteResponse.status()}`).toBeTruthy();
+        expect(deleteResponse.ok(), `order delete HTTP ${deleteResponse.status()}: ${await deleteResponse.text().catch(() => '')}`).toBeTruthy();
         await expectSnack(page, /deleted/i);
     } catch (error) {
         throw new Error(

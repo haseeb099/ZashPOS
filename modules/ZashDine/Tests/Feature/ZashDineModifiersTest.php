@@ -457,6 +457,289 @@ final class ZashDineModifiersTest extends TestCase
         $this->assertNotSame( '', (string) $loaded->json( 'products.0.zash_dine_modifiers_key' ) );
     }
 
+    public function test_omitted_modifier_metadata_preserves_surcharge_stock_and_protection(): void
+    {
+        [$table] = $this->createAvailableTable();
+        [$meal, $mealUnit, $ingredient] = $this->stockedPair();
+        $group = $this->makeGroup( [
+            'min_selections' => 0,
+            'allow_quantity' => true,
+        ] );
+        $modifier = $this->makeModifier( $group, $ingredient, ['price' => 2] );
+        $this->assignGroup( $meal, $group );
+
+        $unitPrice = $this->bakedPrice( $mealUnit, 2 );
+        $selection = [['modifier_id' => $modifier->id, 'quantity' => 1]];
+        $order = $this->placeOrder( $this->dineInDetails( $table, $this->productLine(
+            $meal,
+            $mealUnit,
+            1,
+            $unitPrice,
+            $selection
+        ) ) );
+
+        $saved = $order['products'][0];
+        $stockAfterCreate = $this->stockOf( $ingredient );
+        $omitted = $this->savedProductLine( $saved, $selection, $unitPrice, 2 );
+        unset( $omitted['zash_dine_modifiers'] );
+        $dineExtra = [
+            'type' => ['identifier' => DineInTableService::ORDER_TYPE],
+            DineInTableService::TABLE_FIELD => $table->id,
+        ];
+
+        $tampered = $this->resubmit(
+            $order,
+            array_merge( $omitted, [
+                'unit_price' => (float) $mealUnit->fresh()->sale_price_edit,
+                'quantity' => 2,
+            ] ),
+            $dineExtra
+        );
+        $this->assertSame( 403, $tampered->status(), (string) $tampered->getContent() );
+        $this->assertStringContainsString( 'line price', (string) $tampered->json( 'message' ) );
+
+        $this->resubmit(
+            $order,
+            array_merge( $omitted, [
+                'unit_price' => $unitPrice,
+                'quantity' => 2,
+            ] ),
+            $dineExtra
+        )->assertOk();
+
+        $this->assertEqualsWithDelta( $stockAfterCreate - 1, $this->stockOf( $ingredient ), 0.0001 );
+        $this->assertEqualsWithDelta(
+            2,
+            (float) OrderProductModifier::query()->where( 'order_product_id', $saved['id'] )->value( 'stock_applied' ),
+            0.0001
+        );
+
+        $item = OrderItem::query()->where( 'order_id', $order['id'] )->firstOrFail();
+        $this->json( 'POST', 'api/zash-dine/order-items/' . $item->id . '/kitchen-status', [
+            'status' => OrderItem::STATUS_PREPARING,
+        ] )->assertOk();
+
+        $waiter = $this->createUserWithZashDinePermissions( [
+            'zash.dine.waiter',
+            'nexopos.create.orders',
+            'nexopos.update.orders',
+            'nexopos.read.orders',
+        ] );
+        $this->actingAs( $waiter );
+
+        $cleared = $this->savedProductLine( $saved, [], $this->bakedPrice( $mealUnit, 0 ), 2 );
+        $blocked = $this->resubmit( $order, $cleared, $dineExtra );
+        $this->assertSame( 403, $blocked->status(), (string) $blocked->getContent() );
+        $this->assertStringContainsString(
+            'Only a manager can change modifiers',
+            (string) $blocked->json( 'message' )
+        );
+
+        $this->attemptAuthenticate();
+    }
+
+    public function test_unchanged_selection_keeps_historical_snapshots_after_catalog_changes(): void
+    {
+        [$meal, $mealUnit, $ingredient] = $this->stockedPair();
+        $replacementIngredient = Product::query()
+            ->notGrouped()
+            ->notInGroup()
+            ->where( 'stock_management', Product::STOCK_MANAGEMENT_ENABLED )
+            ->whereHas( 'unit_quantities' )
+            ->whereNotIn( 'id', [$meal->id, $ingredient->id] )
+            ->with( 'unit_quantities' )
+            ->first();
+        $this->assertInstanceOf( Product::class, $replacementIngredient );
+        $this->prepareProduct( $replacementIngredient, 100 );
+
+        $group = $this->makeGroup( ['min_selections' => 1] );
+        $originalName = 'Snap Sauce ' . Str::random( 4 );
+        $modifier = $this->makeModifier( $group, $ingredient, [
+            'name' => $originalName,
+            'price' => 1.25,
+        ] );
+        $this->assignGroup( $meal, $group );
+
+        $unitPrice = $this->bakedPrice( $mealUnit, 1.25 );
+        $selection = [['modifier_id' => $modifier->id, 'quantity' => 1]];
+        $order = $this->placeOrder( $this->takeawayDetails( $this->productLine(
+            $meal,
+            $mealUnit,
+            1,
+            $unitPrice,
+            $selection
+        ) ) );
+        $saved = $order['products'][0];
+        $stockAfterCreate = $this->stockOf( $ingredient );
+
+        $modifier->name = 'Renamed ' . Str::random( 4 );
+        $modifier->price = 9.99;
+        $modifier->product_id = $replacementIngredient->id;
+        $modifier->status = Modifier::STATUS_DISABLED;
+        $modifier->save();
+
+        $this->resubmit( $order, $this->savedProductLine( $saved, $selection, $unitPrice, 1 ) )
+            ->assertOk();
+
+        $row = OrderProductModifier::query()->where( 'order_product_id', $saved['id'] )->firstOrFail();
+        $this->assertSame( $originalName, $row->name );
+        $this->assertEqualsWithDelta( 1.25, (float) $row->price, 0.0001 );
+        $this->assertSame( (int) $ingredient->id, (int) $row->product_id );
+        $this->assertEqualsWithDelta( $stockAfterCreate, $this->stockOf( $ingredient ), 0.0001 );
+        $this->assertEqualsWithDelta( 100, $this->stockOf( $replacementIngredient ), 0.0001 );
+
+        $modifier->delete();
+
+        $loaded = $this->json( 'GET', 'api/pos/orders/' . $order['id'] )->assertOk();
+        $loaded->assertJsonPath( 'products.0.zash_dine_modifiers.0.name', $originalName );
+        $loaded->assertJsonPath( 'products.0.zash_dine_modifiers.0.price', 1.25 );
+    }
+
+    public function test_void_returns_modifier_stock_idempotently_and_keeps_history(): void
+    {
+        [$meal, $mealUnit, $ingredient] = $this->stockedPair();
+        $group = $this->makeGroup( ['min_selections' => 1] );
+        $modifier = $this->makeModifier( $group, $ingredient, ['price' => 1] );
+        $this->assignGroup( $meal, $group );
+
+        $before = $this->stockOf( $ingredient );
+        $order = $this->placeOrder( $this->takeawayDetails( $this->productLine(
+            $meal,
+            $mealUnit,
+            2,
+            $this->bakedPrice( $mealUnit, 1 ),
+            [['modifier_id' => $modifier->id, 'quantity' => 1]]
+        ) ) );
+        $orderProductId = (int) $order['products'][0]['id'];
+        $this->assertEqualsWithDelta( $before - 2, $this->stockOf( $ingredient ), 0.0001 );
+
+        $this->json( 'POST', 'api/orders/' . $order['id'] . '/void', [
+            'reason' => 'Modifier void regression',
+        ] )->assertOk();
+
+        $this->assertEqualsWithDelta( $before, $this->stockOf( $ingredient ), 0.0001 );
+        $this->assertTrue(
+            OrderProductModifier::query()->where( 'order_product_id', $orderProductId )->exists()
+        );
+        $this->assertEqualsWithDelta(
+            0,
+            (float) OrderProductModifier::query()->where( 'order_product_id', $orderProductId )->value( 'stock_applied' ),
+            0.0001
+        );
+
+        $historyAfterVoid = $this->modifierHistoryCount( $ingredient->id );
+        app( ModifierService::class )->returnModifierStockForVoidedOrder( Order::query()->findOrFail( $order['id'] ) );
+        $this->assertSame( $historyAfterVoid, $this->modifierHistoryCount( $ingredient->id ) );
+        $this->assertEqualsWithDelta( $before, $this->stockOf( $ingredient ), 0.0001 );
+
+        OrderProduct::query()->whereKey( $orderProductId )->firstOrFail()->delete();
+        $this->assertEqualsWithDelta( $before, $this->stockOf( $ingredient ), 0.0001 );
+        $this->assertFalse(
+            OrderProductModifier::query()->where( 'order_product_id', $orderProductId )->exists()
+        );
+    }
+
+    public function test_product_group_assignment_is_authorized_validated_and_transactional(): void
+    {
+        [$meal] = $this->stockedPair();
+        $group = $this->makeGroup();
+        $this->assignGroup( $meal, $group );
+        $existing = DB::table( 'zash_dine_product_modifier_groups' )
+            ->where( 'product_id', $meal->id )
+            ->pluck( 'modifier_group_id' )
+            ->map( fn ( $id ) => (int) $id )
+            ->all();
+
+        $waiter = $this->createUserWithZashDinePermissions( ['zash.dine.waiter'] );
+        $this->actingAs( $waiter );
+
+        $this->json( 'PUT', 'api/zash-dine/products/' . $meal->id . '/modifier-groups', [
+            'group_ids' => [$group->id],
+        ] )->assertStatus( 403 );
+
+        $this->assertEqualsCanonicalizing(
+            $existing,
+            DB::table( 'zash_dine_product_modifier_groups' )->where( 'product_id', $meal->id )->pluck( 'modifier_group_id' )->map( fn ( $id ) => (int) $id )->all()
+        );
+
+        Hook::filter( 'ns-update-products-inputs', [
+            'name' => $meal->name,
+        ], [
+            'modifiers' => [
+                'modifier_group_ids' => [999999],
+            ],
+        ] );
+
+        $this->assertFalse( app()->bound( ModifierService::PENDING_GROUPS_KEY ) );
+        $this->assertEqualsCanonicalizing(
+            $existing,
+            DB::table( 'zash_dine_product_modifier_groups' )->where( 'product_id', $meal->id )->pluck( 'modifier_group_id' )->map( fn ( $id ) => (int) $id )->all()
+        );
+
+        $this->attemptAuthenticate();
+
+        try {
+            app( ModifierService::class )->replaceProductGroups( $meal, [999999] );
+            $this->fail( 'Expected invalid group ids to be rejected.' );
+        } catch ( \App\Exceptions\NotAllowedException ) {
+            // expected
+        }
+
+        $this->assertEqualsCanonicalizing(
+            $existing,
+            DB::table( 'zash_dine_product_modifier_groups' )->where( 'product_id', $meal->id )->pluck( 'modifier_group_id' )->map( fn ( $id ) => (int) $id )->all()
+        );
+
+        $second = $this->makeGroup();
+        $assigned = app( ModifierService::class )->replaceProductGroups( $meal, [$group->id, $second->id] );
+        $this->assertEqualsCanonicalizing( [$group->id, $second->id], $assigned );
+    }
+
+    public function test_hold_to_non_hold_applies_modifier_stock(): void
+    {
+        [$meal, $mealUnit, $ingredient] = $this->stockedPair();
+        $group = $this->makeGroup( ['min_selections' => 1] );
+        $modifier = $this->makeModifier( $group, $ingredient, ['price' => 1] );
+        $this->assignGroup( $meal, $group );
+
+        $before = $this->stockOf( $ingredient );
+        $selection = [['modifier_id' => $modifier->id, 'quantity' => 1]];
+        $unitPrice = $this->bakedPrice( $mealUnit, 1 );
+        $line = $this->productLine( $meal, $mealUnit, 2, $unitPrice, $selection );
+        $details = $this->takeawayDetails( $line );
+        $details['payment_status'] = Order::PAYMENT_HOLD;
+
+        $order = $this->placeOrder( $details );
+        $saved = $order['products'][0];
+        $this->assertSame( Order::PAYMENT_HOLD, $order['payment_status'] );
+        $this->assertEqualsWithDelta( $before, $this->stockOf( $ingredient ), 0.0001 );
+        $this->assertEqualsWithDelta(
+            0,
+            (float) OrderProductModifier::query()->where( 'order_product_id', $saved['id'] )->value( 'stock_applied' ),
+            0.0001
+        );
+
+        $payload = $order;
+        $payload['type'] = ['identifier' => 'takeaway'];
+        $payload['payment_status'] = Order::PAYMENT_UNPAID;
+        $payload['coupons'] = [];
+        $payload['payments'] = [];
+        $payload['products'] = [$this->savedProductLine( $saved, $selection, $unitPrice, 2 )];
+        $payload['discount_type'] = '';
+        $payload['discount'] = 0;
+        $payload['discount_percentage'] = 0;
+        $payload['subtotal'] = $unitPrice * 2;
+
+        $this->json( 'PUT', 'api/orders/' . $order['id'], $payload )->assertOk();
+
+        $this->assertEqualsWithDelta( $before - 2, $this->stockOf( $ingredient ), 0.0001 );
+        $this->assertEqualsWithDelta(
+            2,
+            (float) OrderProductModifier::query()->where( 'order_product_id', $saved['id'] )->value( 'stock_applied' ),
+            0.0001
+        );
+    }
+
     public function test_pos_groups_product_form_and_client_hooks(): void
     {
         [$meal, , $ingredient] = $this->stockedPair();

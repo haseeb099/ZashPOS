@@ -90,11 +90,21 @@ function ensureLaravelEnv() {
     contents = upsertEnv(contents, 'SANCTUM_STATEFUL_DOMAINS', `${hostPort},localhost,127.0.0.1`);
     // Product/category generation must not require a live Reverb process.
     contents = upsertEnv(contents, 'BROADCAST_DRIVER', 'log');
+    // Local junction worktrees: bootstrap/app.php loads prefer-app-modules (D-018).
+    contents = upsertEnv(contents, 'ZASHPOS_PREFER_LOCAL_APP', '1');
     fs.writeFileSync(envFile, contents);
 }
 
 function artisan(args) {
-    const result = spawnSync('php', ['artisan', '--env=e2e', ...args], {
+    /**
+     * Prefer checkout-local App/Modules when vendor/ is a junction (D-018).
+     * Production artisan does not load prefer-app-modules.php; e2e setup is local tooling.
+     */
+    const preferApp = path.join(projectRoot, 'bootstrap', 'prefer-app-modules.php');
+    const phpArgs = fs.existsSync(preferApp)
+        ? ['-d', `auto_prepend_file=${preferApp}`, 'artisan', '--env=e2e', ...args]
+        : ['artisan', '--env=e2e', ...args];
+    const result = spawnSync('php', phpArgs, {
         cwd: projectRoot,
         encoding: 'utf8',
         env: process.env,

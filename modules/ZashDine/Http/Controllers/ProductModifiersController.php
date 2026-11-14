@@ -14,14 +14,10 @@ class ProductModifiersController extends DashboardController
      */
     public function sync( Request $request, Product $product, ModifierService $modifierService ): array
     {
-        $groupIds = collect( $request->input( 'group_ids', [] ) )
-            ->map( fn ( $id ) => (int) $id )
-            ->filter( fn ( int $id ) => $id > 0 )
-            ->unique()
-            ->values()
-            ->all();
-
-        $modifierService->syncProductGroups( $product, $groupIds );
+        $groupIds = $modifierService->replaceProductGroups(
+            $product,
+            is_array( $request->input( 'group_ids' ) ) ? $request->input( 'group_ids' ) : []
+        );
 
         return [
             'status' => 'success',

@@ -3,8 +3,9 @@
 declare(strict_types=1);
 
 /**
- * vendor/ is sometimes a junction to another checkout, so Composer's $baseDir
- * points at that checkout's app/ and modules/. Prefer this application's trees.
+ * Local tooling only (D-018). Not required from artisan / public/index.php.
+ * Loaded when ZASHPOS_PREFER_LOCAL_APP=1 (bootstrap/app.php), tests/bootstrap.php,
+ * or scripts/local-artisan.ps1. Prefer a checkout-local `composer install`.
  */
 $applicationBasePath = realpath( dirname( __DIR__ ) );
 

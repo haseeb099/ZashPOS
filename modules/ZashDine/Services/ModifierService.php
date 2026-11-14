@@ -82,7 +82,14 @@ class ModifierService
     public function captureProductModifierGroups( array $inputs, mixed $source ): array
     {
         if ( is_array( $source ) && array_key_exists( 'modifiers', $source ) ) {
+            if ( ! $this->canManageAssignments() ) {
+                unset( $inputs['modifier_group_ids'] );
+
+                return $inputs;
+            }
+
             $raw = $source['modifiers']['modifier_group_ids'] ?? $inputs['modifier_group_ids'] ?? [];
+            // Validate every group before the product save continues; invalid ids never stage a mutation.
             app()->instance( self::PENDING_GROUPS_KEY, $this->normalizeGroupIds( $raw ) );
         }
 
@@ -99,8 +106,55 @@ class ModifierService
 
         /** @var array<int, int> $ids */
         $ids = app( self::PENDING_GROUPS_KEY );
-        $this->syncProductGroups( $product, is_array( $ids ) ? $ids : [] );
         app()->forgetInstance( self::PENDING_GROUPS_KEY );
+
+        if ( ! $this->canManageAssignments() ) {
+            return;
+        }
+
+        $this->replaceProductGroups( $product, is_array( $ids ) ? $ids : [], alreadyNormalized: true );
+    }
+
+    /**
+     * Validate every group, require manage permission, then replace assignments atomically.
+     *
+     * @param  array<int, mixed>  $groupIds
+     * @return list<int>
+     */
+    public function replaceProductGroups( Product $product, array $groupIds, bool $alreadyNormalized = false ): array
+    {
+        if ( ! $this->canManageAssignments() ) {
+            throw new NotAllowedException(
+                __m( 'You are not allowed to assign modifier groups to products.', 'ZashDine' )
+            );
+        }
+
+        $normalized = $alreadyNormalized
+            ? array_values( array_map( 'intval', $groupIds ) )
+            : $this->normalizeGroupIds( $groupIds );
+
+        if ( ! Schema::hasTable( 'zash_dine_product_modifier_groups' ) ) {
+            return $normalized;
+        }
+
+        DB::transaction( function () use ( $product, $normalized ): void {
+            DB::table( 'zash_dine_product_modifier_groups' )
+                ->where( 'product_id', $product->id )
+                ->delete();
+
+            $now = now();
+
+            foreach ( $normalized as $groupId ) {
+                DB::table( 'zash_dine_product_modifier_groups' )->insert( [
+                    'product_id' => $product->id,
+                    'modifier_group_id' => $groupId,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ] );
+            }
+        } );
+
+        return $normalized;
     }
 
     /**
@@ -108,24 +162,7 @@ class ModifierService
      */
     public function syncProductGroups( Product $product, array $groupIds ): void
     {
-        if ( ! Schema::hasTable( 'zash_dine_product_modifier_groups' ) ) {
-            return;
-        }
-
-        DB::table( 'zash_dine_product_modifier_groups' )
-            ->where( 'product_id', $product->id )
-            ->delete();
-
-        $now = now();
-
-        foreach ( $groupIds as $groupId ) {
-            DB::table( 'zash_dine_product_modifier_groups' )->insert( [
-                'product_id' => $product->id,
-                'modifier_group_id' => $groupId,
-                'created_at' => $now,
-                'updated_at' => $now,
-            ] );
-        }
+        $this->replaceProductGroups( $product, $groupIds, alreadyNormalized: true );
     }
 
     /**
@@ -138,23 +175,23 @@ class ModifierService
         $requiredByIngredient = [];
 
         foreach ( $products as $product ) {
-            $lines = $this->linesFromProduct( $product );
-            $this->assertProductModifiers( $product, $lines );
+            $selection = $this->resolveModifierSelection( $product );
+            $this->assertProductModifiers( $product, $selection );
 
-            if ( $skipStock || $lines === [] ) {
+            if ( $skipStock || $selection['lines'] === [] ) {
                 continue;
             }
 
             $mealQuantity = (float) ( $product['quantity'] ?? 0 );
 
-            foreach ( $lines as $line ) {
-                $modifier = $this->modifierOrFail( $line['modifier_id'] );
+            foreach ( $selection['lines'] as $line ) {
+                $ingredientId = $this->ingredientIdForLine( $line, $selection['persisted'] );
 
-                if ( ! $modifier->product_id ) {
+                if ( ! $ingredientId ) {
                     continue;
                 }
 
-                $requiredByIngredient[$modifier->product_id] = ( $requiredByIngredient[$modifier->product_id] ?? 0 )
+                $requiredByIngredient[$ingredientId] = ( $requiredByIngredient[$ingredientId] ?? 0 )
                     + ( $line['quantity'] * $mealQuantity );
             }
         }
@@ -166,17 +203,25 @@ class ModifierService
 
     /**
      * Add the modifier surcharge onto the catalog unit price used for POS price permission.
+     * Omitted metadata on existing lines reconciles from persisted snapshots so base-only
+     * tampering cannot drop the surcharge.
      *
      * @param  array<string, mixed>  $product
      */
     public function adjustCanonicalUnitPrice( mixed $canonical, array $product ): mixed
     {
-        if ( ! is_numeric( $canonical ) || ! $this->hasSubmittedLines( $product ) ) {
+        if ( ! is_numeric( $canonical ) ) {
+            return $canonical;
+        }
+
+        $selection = $this->resolveModifierSelection( $product );
+
+        if ( $selection['lines'] === [] ) {
             return $canonical;
         }
 
         try {
-            $surcharge = $this->surchargeForLines( $this->normalizeLines( $product['zash_dine_modifiers'] ) );
+            $surcharge = $this->surchargeForSelection( $selection );
         } catch ( NotAllowedException ) {
             return $canonical;
         }
@@ -187,15 +232,21 @@ class ModifierService
     public function syncOrderProduct( OrderProduct $orderProduct ): void
     {
         $data = $orderProduct->getData();
+        $paymentStatus = Order::query()->whereKey( $orderProduct->order_id )->value( 'payment_status' );
+        $hold = $paymentStatus === Order::PAYMENT_HOLD;
+        $mealQuantity = (float) $orderProduct->quantity;
 
+        /**
+         * Omitted metadata: preserve saved selections and reconcile stock against the
+         * current meal quantity / hold flag (hold keeps stock_applied at 0).
+         */
         if ( ! is_array( $data ) || ! array_key_exists( 'zash_dine_modifiers', $data ) ) {
+            $this->reconcilePersistedStock( $orderProduct, $hold, $mealQuantity );
+
             return;
         }
 
         $lines = $this->normalizeLines( $data['zash_dine_modifiers'] );
-        $paymentStatus = Order::query()->whereKey( $orderProduct->order_id )->value( 'payment_status' );
-        $hold = $paymentStatus === Order::PAYMENT_HOLD;
-        $mealQuantity = (float) $orderProduct->quantity;
         $modifiers = Modifier::query()
             ->whereIn( 'id', collect( $lines )->pluck( 'modifier_id' )->all() )
             ->get()
@@ -203,46 +254,40 @@ class ModifierService
         $existing = OrderProductModifier::query()
             ->where( 'order_product_id', $orderProduct->id )
             ->get()
-            ->keyBy( 'modifier_id' );
+            ->keyBy( fn ( OrderProductModifier $row ) => (int) $row->modifier_id );
         $kept = [];
 
         foreach ( $lines as $line ) {
-            $modifier = $modifiers->get( $line['modifier_id'] );
+            $modifierId = (int) $line['modifier_id'];
+            $row = $existing->get( $modifierId );
+            $modifier = $modifiers->get( $modifierId );
+            $isExistingSelection = $row instanceof OrderProductModifier && $row->exists;
 
-            if ( ! $modifier instanceof Modifier ) {
-                throw new NotAllowedException( __m( 'This modifier is not available.', 'ZashDine' ) );
-            }
+            if ( $isExistingSelection ) {
+                // Preserve historical name, price, and ingredient for unchanged saved selections.
+                $row->quantity = $line['quantity'];
+            } else {
+                if ( ! $modifier instanceof Modifier || ! $modifier->isEnabled() ) {
+                    throw new NotAllowedException( __m( 'This modifier is not available.', 'ZashDine' ) );
+                }
 
-            $row = $existing->get( $modifier->id );
-
-            if ( ! $row instanceof OrderProductModifier ) {
                 $row = new OrderProductModifier;
                 $row->stock_applied = 0;
-            }
-
-            $nextIngredientId = $modifier->product_id ? (int) $modifier->product_id : null;
-
-            if ( ! $hold && $row->exists && (int) $row->product_id !== (int) $nextIngredientId ) {
-                $this->applyStockDelta( $row, 0, $orderProduct );
-                $row->stock_applied = 0;
+                $row->modifier_id = $modifier->id;
+                $row->modifier_group_id = $modifier->modifier_group_id;
+                $row->name = $modifier->name;
+                $row->price = $modifier->price;
+                $row->quantity = $line['quantity'];
+                $row->product_id = $modifier->product_id ? (int) $modifier->product_id : null;
             }
 
             $row->order_id = $orderProduct->order_id;
             $row->order_product_id = $orderProduct->id;
-            $row->modifier_id = $modifier->id;
-            $row->modifier_group_id = $modifier->modifier_group_id;
-            $row->name = $modifier->name;
-            $row->price = $modifier->price;
-            $row->quantity = $line['quantity'];
-            $row->product_id = $nextIngredientId;
 
-            if ( $hold ) {
-                $row->save();
-            } else {
-                $this->applyStockDelta( $row, $line['quantity'] * $mealQuantity, $orderProduct );
-            }
+            $required = $hold ? 0.0 : ( $line['quantity'] * $mealQuantity );
+            $this->applyStockDelta( $row, $required, $orderProduct );
 
-            $kept[] = (int) $modifier->id;
+            $kept[] = $modifierId;
         }
 
         foreach ( $existing as $modifierId => $row ) {
@@ -250,12 +295,70 @@ class ModifierService
                 continue;
             }
 
-            if ( ! $hold ) {
-                $this->applyStockDelta( $row, 0, $orderProduct );
-            }
-
+            $this->applyStockDelta( $row, 0, $orderProduct );
             $row->delete();
         }
+    }
+
+    /**
+     * Return applied modifier stock for a voided order without deleting history rows.
+     * Idempotent: repeated voids (or void then delete) only return remaining stock_applied.
+     */
+    public function returnModifierStockForVoidedOrder( Order $order ): void
+    {
+        $this->reconcileOrderModifierStock( $order, requiredMultiplier: 0.0 );
+    }
+
+    /**
+     * When an order leaves hold, apply outstanding modifier ingredient stock.
+     * Product sync may run while payment_status is still hold, so status change is authoritative.
+     */
+    public function applyModifierStockAfterLeavingHold( Order $order ): void
+    {
+        if ( $order->payment_status === Order::PAYMENT_HOLD ) {
+            return;
+        }
+
+        $this->reconcileOrderModifierStock( $order, requiredMultiplier: null );
+    }
+
+    /**
+     * @param  float|null  $requiredMultiplier  null = meal qty × modifier qty; 0 = return all.
+     */
+    protected function reconcileOrderModifierStock( Order $order, ?float $requiredMultiplier ): void
+    {
+        if ( ! Schema::hasTable( 'zash_dine_order_product_modifiers' ) ) {
+            return;
+        }
+
+        DB::transaction( function () use ( $order, $requiredMultiplier ): void {
+            $rows = OrderProductModifier::query()
+                ->where( 'order_id', $order->id )
+                ->lockForUpdate()
+                ->get();
+
+            $orderProducts = OrderProduct::query()
+                ->where( 'order_id', $order->id )
+                ->get()
+                ->keyBy( 'id' );
+
+            foreach ( $rows as $row ) {
+                $orderProduct = $orderProducts->get( $row->order_product_id );
+
+                if ( ! $orderProduct instanceof OrderProduct ) {
+                    $orderProduct = new OrderProduct;
+                    $orderProduct->id = (int) $row->order_product_id;
+                    $orderProduct->order_id = $order->id;
+                    $orderProduct->quantity = 0;
+                }
+
+                $required = $requiredMultiplier === null
+                    ? ( (float) $row->quantity * (float) $orderProduct->quantity )
+                    : ( $requiredMultiplier * (float) $row->quantity );
+
+                $this->applyStockDelta( $row, $required, $orderProduct );
+            }
+        } );
     }
 
     public function releaseAppliedStock( OrderProduct $orderProduct ): void
@@ -265,14 +368,7 @@ class ModifierService
             ->get();
 
         foreach ( $rows as $row ) {
-            $applied = (float) $row->stock_applied;
-
-            if ( $applied > self::PRICE_TOLERANCE && $row->product_id ) {
-                $this->moveStock( $row, ProductHistory::ACTION_ADJUSTMENT_RETURN, $applied, $orderProduct );
-            }
-
-            $row->stock_applied = 0;
-            $row->save();
+            $this->applyStockDelta( $row, 0, $orderProduct );
             $row->delete();
         }
     }
@@ -412,10 +508,17 @@ class ModifierService
 
     /**
      * @param  array<string, mixed>  $product
-     * @param  list<array{modifier_id: int, quantity: float}>  $lines
+     * @param  array{
+     *     lines: list<array{modifier_id: int, quantity: float}>,
+     *     persisted: Collection<int, OrderProductModifier>,
+     *     key_present: bool,
+     *     reconciled: bool
+     * }  $selection
      */
-    protected function assertProductModifiers( array $product, array $lines ): void
+    protected function assertProductModifiers( array $product, array $selection ): void
     {
+        $lines = $selection['lines'];
+        $persisted = $selection['persisted'];
         $mode = (string) ( $product['mode'] ?? 'normal' );
 
         if ( $mode === 'custom' && $lines !== [] ) {
@@ -433,16 +536,26 @@ class ModifierService
         }
 
         $groups = $productId > 0 ? $this->assignedGroups( $productId ) : collect();
-        $modifiers = $this->modifiersForLines( $lines );
         $byGroup = [];
+        $hasIncomingSelection = false;
 
         foreach ( $lines as $line ) {
-            $modifier = $modifiers->get( $line['modifier_id'] );
+            $existing = $persisted->get( (int) $line['modifier_id'] );
 
-            if ( ! $modifier instanceof Modifier || ! $modifier->isEnabled() ) {
-                throw new NotAllowedException( __m( 'This modifier is not available.', 'ZashDine' ) );
+            if ( $existing instanceof OrderProductModifier ) {
+                $groupId = $existing->modifier_group_id ? (int) $existing->modifier_group_id : 0;
+                $group = $groups->firstWhere( 'id', $groupId );
+
+                if ( $group instanceof ModifierGroup ) {
+                    $byGroup[$group->id][] = $line;
+                    $this->assertQuantityRules( $group, $line );
+                }
+
+                continue;
             }
 
+            $hasIncomingSelection = true;
+            $modifier = $this->modifierOrFail( (int) $line['modifier_id'] );
             $group = $groups->firstWhere( 'id', $modifier->modifier_group_id );
 
             if ( ! $group instanceof ModifierGroup ) {
@@ -452,47 +565,37 @@ class ModifierService
             }
 
             $byGroup[$group->id][] = $line;
+            $this->assertQuantityRules( $group, $line );
         }
 
-        foreach ( $groups as $group ) {
-            $chosen = $byGroup[$group->id] ?? [];
-            $count = count( $chosen );
-            $minimum = (int) $group->min_selections;
-            $maximum = $this->effectiveMax( $group );
+        /**
+         * Persisted selections keep their recorded terms if the catalog later tightens.
+         * New lines (even with omitted metadata), clears, and newly added modifiers use
+         * current group min/max. Omitted metadata on existing lines reconciles and skips.
+         */
+        $explicitClear = $selection['key_present'] && $lines === [] && $persisted->isNotEmpty();
 
-            if ( $count < $minimum ) {
-                throw new NotAllowedException(
-                    sprintf(
-                        __m( 'Select at least %1$s option(s) from %2$s.', 'ZashDine' ),
-                        $minimum,
-                        $group->name
-                    )
-                );
-            }
+        if ( $hasIncomingSelection || $explicitClear || $persisted->isEmpty() ) {
+            foreach ( $groups as $group ) {
+                $chosen = $byGroup[$group->id] ?? [];
+                $count = count( $chosen );
+                $minimum = (int) $group->min_selections;
+                $maximum = $this->effectiveMax( $group );
 
-            if ( $maximum !== null && $count > $maximum ) {
-                throw new NotAllowedException(
-                    sprintf(
-                        __m( 'Too many options are selected for %s.', 'ZashDine' ),
-                        $group->name
-                    )
-                );
-            }
-
-            foreach ( $chosen as $line ) {
-                if ( ! $group->allow_quantity && abs( $line['quantity'] - 1 ) >= self::PRICE_TOLERANCE ) {
+                if ( $count < $minimum ) {
                     throw new NotAllowedException(
                         sprintf(
-                            __m( 'Modifier quantities are not allowed for %s.', 'ZashDine' ),
+                            __m( 'Select at least %1$s option(s) from %2$s.', 'ZashDine' ),
+                            $minimum,
                             $group->name
                         )
                     );
                 }
 
-                if ( $group->allow_quantity && $line['quantity'] < 1 ) {
+                if ( $maximum !== null && $count > $maximum ) {
                     throw new NotAllowedException(
                         sprintf(
-                            __m( 'Modifier quantity for %s must be at least 1.', 'ZashDine' ),
+                            __m( 'Too many options are selected for %s.', 'ZashDine' ),
                             $group->name
                         )
                     );
@@ -500,7 +603,7 @@ class ModifierService
             }
         }
 
-        if ( ! $this->shouldCheckPrice( $product, $lines, $groups ) ) {
+        if ( ! $this->shouldCheckPrice( $product, $lines, $groups, $selection ) ) {
             return;
         }
 
@@ -513,11 +616,35 @@ class ModifierService
             );
         }
 
-        $expected = $base + $this->surchargeForLines( $lines );
+        $expected = $base + $this->surchargeForSelection( $selection );
 
         if ( ! $this->pricesMatch( $product['unit_price'] ?? null, $expected ) ) {
             throw new NotAllowedException(
                 __m( 'The line price does not match the selected modifiers.', 'ZashDine' )
+            );
+        }
+    }
+
+    /**
+     * @param  array{modifier_id: int, quantity: float}  $line
+     */
+    protected function assertQuantityRules( ModifierGroup $group, array $line ): void
+    {
+        if ( ! $group->allow_quantity && abs( $line['quantity'] - 1 ) >= self::PRICE_TOLERANCE ) {
+            throw new NotAllowedException(
+                sprintf(
+                    __m( 'Modifier quantities are not allowed for %s.', 'ZashDine' ),
+                    $group->name
+                )
+            );
+        }
+
+        if ( $group->allow_quantity && $line['quantity'] < 1 ) {
+            throw new NotAllowedException(
+                sprintf(
+                    __m( 'Modifier quantity for %s must be at least 1.', 'ZashDine' ),
+                    $group->name
+                )
             );
         }
     }
@@ -672,31 +799,141 @@ class ModifierService
     }
 
     /**
+     * @param  array{
+     *     lines: list<array{modifier_id: int, quantity: float}>,
+     *     persisted: Collection<int, OrderProductModifier>
+     * }  $selection
+     */
+    protected function surchargeForSelection( array $selection ): float
+    {
+        $surcharge = 0.0;
+        $catalogIds = [];
+
+        foreach ( $selection['lines'] as $line ) {
+            $existing = $selection['persisted']->get( (int) $line['modifier_id'] );
+
+            if ( $existing instanceof OrderProductModifier ) {
+                $surcharge += (float) $existing->price * (float) $line['quantity'];
+
+                continue;
+            }
+
+            $catalogIds[] = (int) $line['modifier_id'];
+        }
+
+        if ( $catalogIds === [] ) {
+            return $surcharge;
+        }
+
+        $catalogLines = array_values( array_filter(
+            $selection['lines'],
+            fn ( array $line ) => in_array( (int) $line['modifier_id'], $catalogIds, true )
+        ) );
+
+        return $surcharge + $this->surchargeForLines( $catalogLines );
+    }
+
+    /**
      * @param  list<array{modifier_id: int, quantity: float}>  $lines
      */
     protected function surchargeForLines( array $lines ): float
     {
         $surcharge = 0.0;
+        $modifiers = $this->modifiersForLines( $lines );
 
-        foreach ( $this->modifiersForLines( $lines ) as $modifier ) {
-            $line = collect( $lines )->firstWhere( 'modifier_id', $modifier->id );
+        foreach ( $lines as $line ) {
+            $modifier = $modifiers->get( $line['modifier_id'] );
 
-            if ( ! is_array( $line ) ) {
-                continue;
-            }
-
-            if ( ! $modifier->isEnabled() ) {
+            if ( ! $modifier instanceof Modifier || ! $modifier->isEnabled() ) {
                 throw new NotAllowedException( __m( 'This modifier is not available.', 'ZashDine' ) );
             }
 
             $surcharge += (float) $modifier->price * (float) $line['quantity'];
         }
 
-        if ( $this->modifiersForLines( $lines )->count() !== count( $lines ) ) {
-            throw new NotAllowedException( __m( 'This modifier is not available.', 'ZashDine' ) );
+        return $surcharge;
+    }
+
+    /**
+     * @param  array{modifier_id: int, quantity: float}  $line
+     * @param  Collection<int, OrderProductModifier>  $persisted
+     */
+    protected function ingredientIdForLine( array $line, Collection $persisted ): ?int
+    {
+        $existing = $persisted->get( (int) $line['modifier_id'] );
+
+        if ( $existing instanceof OrderProductModifier ) {
+            return $existing->product_id ? (int) $existing->product_id : null;
         }
 
-        return $surcharge;
+        $modifier = $this->modifierOrFail( (int) $line['modifier_id'] );
+
+        return $modifier->product_id ? (int) $modifier->product_id : null;
+    }
+
+    protected function reconcilePersistedStock( OrderProduct $orderProduct, bool $hold, float $mealQuantity ): void
+    {
+        $rows = OrderProductModifier::query()
+            ->where( 'order_product_id', $orderProduct->id )
+            ->get();
+
+        foreach ( $rows as $row ) {
+            $required = $hold ? 0.0 : ( (float) $row->quantity * $mealQuantity );
+            $this->applyStockDelta( $row, $required, $orderProduct );
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $product
+     * @return array{
+     *     lines: list<array{modifier_id: int, quantity: float}>,
+     *     persisted: Collection<int, OrderProductModifier>,
+     *     key_present: bool,
+     *     reconciled: bool
+     * }
+     */
+    public function resolveModifierSelection( array $product ): array
+    {
+        $orderProductId = (int) ( $product['id'] ?? 0 );
+        $persisted = $orderProductId > 0
+            ? OrderProductModifier::query()
+                ->where( 'order_product_id', $orderProductId )
+                ->get()
+                ->keyBy( fn ( OrderProductModifier $row ) => (int) $row->modifier_id )
+            : collect();
+
+        if ( array_key_exists( 'zash_dine_modifiers', $product ) ) {
+            return [
+                'lines' => $this->normalizeLines( $product['zash_dine_modifiers'] ?? [] ),
+                'persisted' => $persisted,
+                'key_present' => true,
+                'reconciled' => false,
+            ];
+        }
+
+        if ( $persisted->isNotEmpty() ) {
+            return [
+                'lines' => $persisted->map( fn ( OrderProductModifier $row ) => [
+                    'modifier_id' => (int) $row->modifier_id,
+                    'quantity' => (float) $row->quantity,
+                ] )->values()->all(),
+                'persisted' => $persisted,
+                'key_present' => false,
+                'reconciled' => true,
+            ];
+        }
+
+        return [
+            'lines' => [],
+            'persisted' => $persisted,
+            'key_present' => false,
+            'reconciled' => false,
+        ];
+    }
+
+    protected function canManageAssignments(): bool
+    {
+        return ns()->allowedTo( 'zash.dine.manage' );
     }
 
     /**
@@ -762,14 +999,15 @@ class ModifierService
      * @param  array<string, mixed>  $product
      * @param  list<array{modifier_id: int, quantity: float}>  $lines
      * @param  Collection<int, ModifierGroup>  $groups
+     * @param  array{key_present: bool, reconciled: bool}  $selection
      */
-    protected function shouldCheckPrice( array $product, array $lines, Collection $groups ): bool
+    protected function shouldCheckPrice( array $product, array $lines, Collection $groups, array $selection ): bool
     {
         if ( $lines !== [] ) {
             return true;
         }
 
-        return array_key_exists( 'zash_dine_modifiers', $product ) && $groups->isNotEmpty();
+        return $selection['key_present'] && $groups->isNotEmpty();
     }
 
     /**
