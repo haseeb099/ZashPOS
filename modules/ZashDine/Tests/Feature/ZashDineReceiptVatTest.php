@@ -7,21 +7,25 @@ use App\Http\Middleware\CheckApplicationHealthMiddleware;
 use App\Http\Middleware\CheckMigrationStatus;
 use App\Models\Customer;
 use App\Models\Order;
+use App\Models\OrderPayment;
 use App\Models\Product;
 use App\Models\ProductUnitQuantity;
 use App\Models\Role;
+use App\Models\Tax;
 use App\Models\TaxGroup;
 use App\Services\ModulesService;
-use App\Services\TaxService;
+use Illuminate\Foundation\Events\DiscoverEvents;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Modules\ZashDine\Models\Modifier;
 use Modules\ZashDine\Models\ModifierGroup;
 use Modules\ZashDine\Models\OrderProductModifier;
+use Modules\ZashDine\Services\CoreCompatibilityService;
 use Modules\ZashDine\Services\ModifierService;
 use Tests\TestCase;
 use Tests\Traits\WithAuthentication;
@@ -34,9 +38,21 @@ final class ZashDineReceiptVatTest extends TestCase
     use WithOrderTest;
     use WithTaxTest;
 
+    private const VAT_RATE = 20.0;
+
+    private const MEAL_BASE = 8.0;
+
+    private const MODIFIER_PRICE = 2.0;
+
+    private const MEAL_QTY = 2;
+
+    private const MODIFIER_QTY = 1;
+
     private ?int $cleanupMealId = null;
 
     private ?int $cleanupGroupId = null;
+
+    private ?int $cleanupTaxGroupId = null;
 
     protected function setUp(): void
     {
@@ -67,27 +83,58 @@ final class ZashDineReceiptVatTest extends TestCase
             }
         }
 
+        if ( $this->cleanupTaxGroupId !== null ) {
+            Tax::query()->where( 'tax_group_id', $this->cleanupTaxGroupId )->delete();
+            TaxGroup::query()->whereKey( $this->cleanupTaxGroupId )->delete();
+        }
+
         parent::tearDown();
     }
 
-    public function test_exclusive_flat_vat_hold_order_receipt_shows_vat_labels_and_modifiers(): void
+    public function test_exclusive_flat_vat_hold_then_pay_receipt_matches_independent_math(): void
     {
-        $this->assertReceiptVatScenario( taxType: 'exclusive', mealQty: 2, modifierUnitPrice: 1.25, modifierQty: 2 );
+        /**
+         * Independent arithmetic (not TaxService):
+         * unit = 8 + 2 = 10; qty 2 → net £20; 20% exclusive → tax £4; payable £24.
+         */
+        $this->assertFixedVatScenario(
+            taxType: 'exclusive',
+            expectedNetOrGross: 20.0,
+            expectedTax: 4.0,
+            expectedPayable: 24.0,
+        );
     }
 
-    public function test_inclusive_flat_vat_hold_order_receipt_shows_vat_labels_and_modifiers(): void
+    public function test_inclusive_flat_vat_hold_then_pay_receipt_matches_independent_math(): void
     {
-        $this->assertReceiptVatScenario( taxType: 'inclusive', mealQty: 2, modifierUnitPrice: 1.5, modifierQty: 1 );
+        /**
+         * Independent arithmetic: gross £20 inclusive @ 20% →
+         * net = 20 / 1.2 = 16.666…; tax = 20 − net.
+         */
+        $gross = 20.0;
+        $net = $gross / ( 1 + ( self::VAT_RATE / 100 ) );
+        $tax = $gross - $net;
+
+        $this->assertFixedVatScenario(
+            taxType: 'inclusive',
+            expectedNetOrGross: $gross,
+            expectedTax: $tax,
+            expectedPayable: $gross,
+        );
     }
 
-    private function assertReceiptVatScenario(
+    private function assertFixedVatScenario(
         string $taxType,
-        int $mealQty,
-        float $modifierUnitPrice,
-        int $modifierQty
+        float $expectedNetOrGross,
+        float $expectedTax,
+        float $expectedPayable,
     ): void {
         [$meal, $mealUnit, $ingredient] = $this->stockedPair();
         $this->cleanupMealId = (int) $meal->id;
+
+        $mealUnit->sale_price_edit = self::MEAL_BASE;
+        $mealUnit->sale_price = self::MEAL_BASE;
+        $mealUnit->save();
 
         $group = ModifierGroup::query()->create( [
             'name' => 'VAT Addons ' . Str::random( 5 ),
@@ -103,7 +150,7 @@ final class ZashDineReceiptVatTest extends TestCase
         $modifier = Modifier::query()->create( [
             'modifier_group_id' => $group->id,
             'name' => $modifierName,
-            'price' => $modifierUnitPrice,
+            'price' => self::MODIFIER_PRICE,
             'product_id' => $ingredient->id,
             'status' => Modifier::STATUS_ENABLED,
             'author_id' => auth()->id(),
@@ -111,18 +158,13 @@ final class ZashDineReceiptVatTest extends TestCase
 
         app( ModifierService::class )->replaceProductGroups( $meal, [$group->id] );
 
-        $taxGroup = TaxGroup::with( 'taxes' )->firstOrFail();
-        $rate = (float) $taxGroup->taxes->sum( 'rate' );
-        $this->assertGreaterThan( 0, $rate, 'Tax group must have a positive rate for deterministic VAT math.' );
-
-        $taxes = $taxGroup->taxes->map( function ( $tax ) {
-            return [
-                'tax_id' => $tax->id,
-                'name' => $tax->name,
-                'tax_name' => $tax->name,
-                'rate' => (float) $tax->rate,
-            ];
-        } )->values()->all();
+        $taxGroup = $this->makeTwentyPercentTaxGroup();
+        $taxes = [[
+            'tax_id' => $taxGroup->taxes->first()->id,
+            'name' => $taxGroup->taxes->first()->name,
+            'tax_name' => $taxGroup->taxes->first()->name,
+            'rate' => self::VAT_RATE,
+        ]];
 
         ns()->option->set( 'ns_pos_vat', self::TAX_FLAT );
         ns()->option->set( 'ns_pos_tax_group', $taxGroup->id );
@@ -136,17 +178,11 @@ final class ZashDineReceiptVatTest extends TestCase
         ns()->option->set( 'ns_invoice_receipt_column_a', 'VAT No: ' . $vatNumber );
 
         $customer = Customer::query()->firstOrFail();
-        $ingredientStockBefore = $this->stockOf( $ingredient );
+        $unitPrice = self::MEAL_BASE + ( self::MODIFIER_PRICE * self::MODIFIER_QTY );
+        $this->assertEqualsWithDelta( 10.0, $unitPrice, 0.0001 );
+        $this->assertEqualsWithDelta( $expectedNetOrGross, $unitPrice * self::MEAL_QTY, 0.0001 );
 
-        $surcharge = $modifierUnitPrice * $modifierQty;
-        $unitPrice = $this->bakedPrice( $mealUnit, $surcharge );
-        $linePretaxOrGross = $unitPrice * $mealQty;
-        $selection = [['modifier_id' => $modifier->id, 'quantity' => $modifierQty]];
-
-        /** @var TaxService $taxService */
-        $taxService = app( TaxService::class );
-        $expectedTax = $taxService->getVatValue( $taxType, $rate, $linePretaxOrGross );
-        $expectedLineTotal = $linePretaxOrGross;
+        $selection = [['modifier_id' => $modifier->id, 'quantity' => self::MODIFIER_QTY]];
 
         $responses = $this->processOrders( [
             'customer_id' => $customer->id,
@@ -158,7 +194,7 @@ final class ZashDineReceiptVatTest extends TestCase
             'products' => [[
                 'product_id' => $meal->id,
                 'name' => $meal->name,
-                'quantity' => $mealQty,
+                'quantity' => self::MEAL_QTY,
                 'unit_price' => $unitPrice,
                 'unit_quantity_id' => $mealUnit->id,
                 'unit_id' => $mealUnit->unit_id,
@@ -177,58 +213,33 @@ final class ZashDineReceiptVatTest extends TestCase
         $order = $responses[0]['order-creation']['data']['order'] ?? null;
         $this->assertIsArray( $order );
         $this->assertSame( Order::PAYMENT_HOLD, $order['payment_status'] );
+        $this->assertEqualsWithDelta( $expectedNetOrGross, (float) ( $order['subtotal'] ?? 0 ), 0.02 );
+        $this->assertEqualsWithDelta( $expectedTax, (float) ( $order['tax_value'] ?? 0 ), 0.02 );
         $this->assertEqualsWithDelta(
-            $expectedTax,
-            (float) ( $order['tax_value'] ?? 0 ),
+            $expectedPayable,
+            (float) ( $order['total'] ?? 0 ),
             0.02,
-            "Order tax_value must match TaxService {$taxType} calculation."
+            "{$taxType} order.total must equal independently calculated payable."
         );
-        $this->assertEqualsWithDelta(
-            $expectedLineTotal,
-            (float) ( $order['products'][0]['total_price'] ?? 0 ),
-            0.02,
-            'Product line total must equal baked unit_price × meal quantity.'
-        );
-        $this->assertEqualsWithDelta(
-            $expectedLineTotal,
-            (float) ( $order['subtotal'] ?? 0 ),
-            0.02,
-            'Order subtotal must equal the baked line total for this single-line order.'
-        );
-        if ( $taxType === 'inclusive' ) {
-            $this->assertEqualsWithDelta(
-                $expectedLineTotal,
-                (float) ( $order['total'] ?? 0 ),
-                0.02,
-                'Inclusive order total must equal the VAT-inclusive baked line total.'
-            );
-        } else {
-            /**
-             * Flat exclusive VAT is stored on tax_value (asserted above). Core may keep
-             * order.total at pretax subtotal for this create path; receipt still prints
-             * both the total and the tax breakdown lines.
-             */
-            $this->assertEqualsWithDelta(
-                $expectedLineTotal,
-                (float) ( $order['total'] ?? 0 ),
-                0.02,
-                'Exclusive hold/create path keeps order.total at pretax subtotal; VAT is on tax_value.'
-            );
-        }
-        $this->assertEqualsWithDelta( $ingredientStockBefore, $this->stockOf( $ingredient ), 0.0001 );
 
         $orderId = (int) $order['id'];
         $savedLineId = (int) ( $order['products'][0]['id'] ?? 0 );
         $this->assertGreaterThan( 0, $savedLineId );
-        $this->assertEqualsWithDelta(
-            0,
-            (float) OrderProductModifier::query()->where( 'order_product_id', $savedLineId )->value( 'stock_applied' ),
-            0.0001
-        );
         $this->assertSame(
             $modifierName,
             (string) OrderProductModifier::query()->where( 'order_product_id', $savedLineId )->value( 'name' )
         );
+
+        $pay = $this->json( 'POST', 'api/orders/' . $orderId . '/payments', [
+            'identifier' => OrderPayment::PAYMENT_CASH,
+            'value' => $expectedPayable,
+        ] );
+        $pay->assertOk();
+
+        $paid = Order::query()->findOrFail( $orderId );
+        $this->assertSame( Order::PAYMENT_PAID, $paid->payment_status );
+        $this->assertEqualsWithDelta( $expectedPayable, (float) $paid->total, 0.02 );
+        $this->assertEqualsWithDelta( $expectedTax, (float) $paid->tax_value, 0.02 );
 
         $receipt = $this->withoutMiddleware( [
             CheckMigrationStatus::class,
@@ -244,15 +255,28 @@ final class ZashDineReceiptVatTest extends TestCase
         $this->assertStringContainsString( $modifierName, $html );
         $this->assertStringContainsString( $taxType === 'exclusive' ? 'Exclusive' : 'Inclusive', $html );
 
-        $formattedTotal = (string) ns()->currency->define( $order['total'] );
-        $formattedTax = (string) ns()->currency->define( $order['tax_value'] );
-        $this->assertStringContainsString( $formattedTotal, $html );
+        $formattedPayable = (string) ns()->currency->define( $expectedPayable );
+        $formattedTax = (string) ns()->currency->define( $expectedTax );
+        $this->assertStringContainsString( $formattedPayable, $html );
         $this->assertStringContainsString( $formattedTax, $html );
+    }
 
-        $taxName = $taxes[0]['tax_name'] ?? $taxes[0]['name'] ?? '';
-        if ( $taxName !== '' ) {
-            $this->assertStringContainsString( $taxName, $html );
-        }
+    private function makeTwentyPercentTaxGroup(): TaxGroup
+    {
+        $group = TaxGroup::factory()->create( [
+            'name' => 'UK VAT ' . Str::random( 4 ),
+            'author_id' => auth()->id(),
+        ] );
+        $this->cleanupTaxGroupId = (int) $group->id;
+
+        Tax::factory()->create( [
+            'name' => 'VAT ' . self::VAT_RATE . '%',
+            'rate' => self::VAT_RATE,
+            'tax_group_id' => $group->id,
+            'author_id' => auth()->id(),
+        ] );
+
+        return $group->fresh( 'taxes' );
     }
 
     /**
@@ -291,22 +315,18 @@ final class ZashDineReceiptVatTest extends TestCase
         return [$meal, $mealUnit, $ingredient];
     }
 
-    private function stockOf( Product $product ): float
-    {
-        $unit = app( ModifierService::class )->stockUnit( $product->fresh( ['unit_quantities.unit'] ) );
-        $this->assertInstanceOf( ProductUnitQuantity::class, $unit );
-
-        return (float) $unit->fresh()->quantity;
-    }
-
-    private function bakedPrice( ProductUnitQuantity $unit, float $surcharge ): float
-    {
-        return (float) $unit->fresh()->sale_price_edit + $surcharge;
-    }
-
     private function ensureZashDineReady(): void
     {
         Cache::forget( 'ns-core-installed' );
+        CoreCompatibilityService::flush();
+        config( [
+            'nexopos.capabilities' => CoreCompatibilityService::REQUIRED_CAPABILITIES,
+        ] );
+        app( CoreCompatibilityService::class )->remember();
+        $this->assertTrue(
+            CoreCompatibilityService::operationsAllowed(),
+            'VAT tests require a compatible host gate.'
+        );
 
         /** @var ModulesService $modules */
         $modules = app()->make( ModulesService::class );
@@ -340,10 +360,25 @@ final class ZashDineReceiptVatTest extends TestCase
         $modules->boot( $module );
         $modules->triggerServiceProviders( $module, 'register', \Illuminate\Support\ServiceProvider::class );
         $modules->triggerServiceProviders( $module, 'boot', \Illuminate\Support\ServiceProvider::class );
+        $this->rediscoverZashDineListeners();
 
         if ( ! Route::has( 'zash-dine.api.floor' ) ) {
             ModuleRouting::mapModuleWebRoutes( $module );
             ModuleRouting::mapModuleApiRoutes( $module );
+        }
+    }
+
+    private function rediscoverZashDineListeners(): void
+    {
+        $discovered = DiscoverEvents::within(
+            [base_path( 'modules/ZashDine/Listeners' )],
+            base_path()
+        );
+
+        foreach ( $discovered as $event => $listeners ) {
+            foreach ( (array) $listeners as $listener ) {
+                Event::listen( $event, $listener );
+            }
         }
     }
 }

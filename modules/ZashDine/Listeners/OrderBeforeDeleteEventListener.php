@@ -7,6 +7,7 @@ use Modules\ZashDine\Services\DineInTableService;
 
 class OrderBeforeDeleteEventListener
 {
+
     public function __construct( protected DineInTableService $dineInTableService )
     {
         //
@@ -14,6 +15,7 @@ class OrderBeforeDeleteEventListener
 
     public function handle( OrderBeforeDeleteEvent $event ): void
     {
+
         $this->dineInTableService->releaseTableForOrder( $event->order );
     }
 }

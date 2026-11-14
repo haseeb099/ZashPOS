@@ -3,10 +3,14 @@
 namespace Modules\ZashDine\Services;
 
 use App\Exceptions\NotAllowedException;
+use Illuminate\Support\Facades\Log;
 
 /**
  * ZashDine needs ZashPOS fork hooks that stock NexoPOS 6.3.0 does not ship.
  * Numeric core version alone is insufficient.
+ *
+ * This class ships inside the module ZIP so older hosts (without a
+ * capability-aware ModulesService) still get a module-side guard.
  */
 class CoreCompatibilityService
 {
@@ -21,6 +25,120 @@ class CoreCompatibilityService
         self::CAPABILITY_CANONICAL_UNIT_PRICE,
         self::CAPABILITY_CART_MERGEABLE,
     ];
+
+    private static ?bool $operationsAllowed = null;
+
+    private static ?string $rejectionMessage = null;
+
+    /**
+     * @return array{
+     *     compatible: bool,
+     *     message: string,
+     *     missing_declared: list<string>,
+     *     missing_hooks: list<string>
+     * }
+     */
+    public function diagnose( ?string $coreMinVersion = null ): array
+    {
+        $coreMinVersion = $coreMinVersion ?: '6.3.0';
+        $running = (string) config( 'nexopos.version', '0.0.0' );
+        $missingDeclared = $this->missingDeclaredCapabilities();
+        $missingHooks = $this->missingHostHooks();
+
+        if ( version_compare( $running, $coreMinVersion, '<' ) ) {
+            return [
+                'compatible' => false,
+                'message' => sprintf(
+                    __m( 'ZashDine requires ZashPOS %s or newer; this host reports %s.', 'ZashDine' ),
+                    $coreMinVersion,
+                    $running
+                ),
+                'missing_declared' => $missingDeclared,
+                'missing_hooks' => $missingHooks,
+            ];
+        }
+
+        if ( $missingDeclared !== [] ) {
+            return [
+                'compatible' => false,
+                'message' => sprintf(
+                    __m( 'ZashDine requires ZashPOS capabilities [%s]. Stock NexoPOS %s alone is not enough; use a ZashPOS build that declares and implements them (see docs/zashpos/PACKAGING.md). Missing: %s', 'ZashDine' ),
+                    implode( ', ', self::REQUIRED_CAPABILITIES ),
+                    $running,
+                    implode( ', ', $missingDeclared )
+                ),
+                'missing_declared' => $missingDeclared,
+                'missing_hooks' => $missingHooks,
+            ];
+        }
+
+        if ( $missingHooks !== [] ) {
+            return [
+                'compatible' => false,
+                'message' => sprintf(
+                    __m( 'This host is missing ZashDine-required core hooks for: %s. Install on haseeb099/ZashPOS after Phase 4 (modifier-price + cart-merge hooks), not stock NexoPOS.', 'ZashDine' ),
+                    implode( ', ', $missingHooks )
+                ),
+                'missing_declared' => $missingDeclared,
+                'missing_hooks' => $missingHooks,
+            ];
+        }
+
+        return [
+            'compatible' => true,
+            'message' => '',
+            'missing_declared' => [],
+            'missing_hooks' => [],
+        ];
+    }
+
+    /**
+     * Cache the diagnosis for this request so listeners/provider agree.
+     *
+     * @return array{compatible: bool, message: string}
+     */
+    public function remember( ?string $coreMinVersion = null ): array
+    {
+        $diagnosis = $this->diagnose( $coreMinVersion );
+        self::$operationsAllowed = $diagnosis['compatible'];
+        self::$rejectionMessage = $diagnosis['compatible'] ? null : $diagnosis['message'];
+
+        if ( ! $diagnosis['compatible'] ) {
+            Log::warning( 'ZashDine host compatibility rejected: ' . $diagnosis['message'] );
+        }
+
+        return [
+            'compatible' => $diagnosis['compatible'],
+            'message' => $diagnosis['message'],
+        ];
+    }
+
+    public static function operationsAllowed(): bool
+    {
+        if ( self::$operationsAllowed === null ) {
+            app( self::class )->remember();
+        }
+
+        return (bool) self::$operationsAllowed;
+    }
+
+    public static function rejectionMessage(): ?string
+    {
+        if ( self::$operationsAllowed === null ) {
+            app( self::class )->remember();
+        }
+
+        return self::$rejectionMessage;
+    }
+
+    /**
+     * Reset cached gate (tests).
+     */
+    public static function flush(): void
+    {
+        self::$operationsAllowed = null;
+        self::$rejectionMessage = null;
+    }
 
     /**
      * @return list<string>
@@ -64,33 +182,10 @@ class CoreCompatibilityService
      */
     public function assertCompatible( ?string $coreMinVersion = null ): void
     {
-        $coreMinVersion = $coreMinVersion ?: '6.3.0';
-        $running = (string) config( 'nexopos.version', '0.0.0' );
+        $diagnosis = $this->diagnose( $coreMinVersion );
 
-        if ( version_compare( $running, $coreMinVersion, '<' ) ) {
-            throw new NotAllowedException( sprintf(
-                __m( 'ZashDine requires ZashPOS %s or newer; this host reports %s.', 'ZashDine' ),
-                $coreMinVersion,
-                $running
-            ) );
-        }
-
-        $missingDeclared = $this->missingDeclaredCapabilities();
-        if ( $missingDeclared !== [] ) {
-            throw new NotAllowedException( sprintf(
-                __m( 'ZashDine requires ZashPOS capabilities [%s]. Stock NexoPOS %s alone is not enough; use a ZashPOS build that declares and implements them (see docs/zashpos/PACKAGING.md). Missing: %s', 'ZashDine' ),
-                implode( ', ', self::REQUIRED_CAPABILITIES ),
-                $running,
-                implode( ', ', $missingDeclared )
-            ) );
-        }
-
-        $missingHooks = $this->missingHostHooks();
-        if ( $missingHooks !== [] ) {
-            throw new NotAllowedException( sprintf(
-                __m( 'This host is missing ZashDine-required core hooks for: %s. Install on haseeb099/ZashPOS after Phase 4 (modifier-price + cart-merge hooks), not stock NexoPOS.', 'ZashDine' ),
-                implode( ', ', $missingHooks )
-            ) );
+        if ( ! $diagnosis['compatible'] ) {
+            throw new NotAllowedException( $diagnosis['message'] );
         }
     }
 }

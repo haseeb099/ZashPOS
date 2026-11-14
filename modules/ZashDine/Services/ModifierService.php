@@ -19,6 +19,16 @@ use Modules\ZashDine\Models\OrderProductModifier;
 
 class ModifierService
 {
+    private function ensureHostAllowsOperations(): void
+    {
+        if ( ! CoreCompatibilityService::operationsAllowed() ) {
+            throw new NotAllowedException(
+                CoreCompatibilityService::rejectionMessage()
+                    ?? __m( 'ZashDine cannot run on this host.', 'ZashDine' )
+            );
+        }
+    }
+
     public const PENDING_GROUPS_KEY = 'zash-dine.pending-modifier-group-ids';
 
     /**
@@ -170,6 +180,8 @@ class ModifierService
      */
     public function assertSubmittedModifiers( array $fields, ?Order $order = null ): void
     {
+        $this->ensureHostAllowsOperations();
+
         $products = $this->productList( $fields['products'] ?? [] );
         $skipStock = ( $fields['payment_status'] ?? null ) === Order::PAYMENT_HOLD;
         $requiredByIngredient = [];
@@ -231,6 +243,10 @@ class ModifierService
 
     public function syncOrderProduct( OrderProduct $orderProduct ): void
     {
+        if ( ! CoreCompatibilityService::operationsAllowed() ) {
+            return;
+        }
+
         $data = $orderProduct->getData();
         $paymentStatus = Order::query()->whereKey( $orderProduct->order_id )->value( 'payment_status' );
         $hold = $paymentStatus === Order::PAYMENT_HOLD;

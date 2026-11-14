@@ -13,6 +13,8 @@
 
 Enable is refused when the numeric version is too low **or** when any required capability is missing from `config('nexopos.capabilities')`. Stock upstream NexoPOS 6.3.0 does **not** provide those capabilities.
 
+**ZIP-only / older host:** `CoreCompatibilityService` ships inside the module. Even when the receiving core ignores `requires-capabilities`, the provider skips dine-in/modifier hooks, shows a rejection banner/signature, and auto-disables after enable so the dashboard stays up.
+
 ## Build the installable ZIP
 
 From a checkout that already contains ZashDine (with built Blade assets — ZashDine ships POS/Floor/Kitchen scripts as Blade, not a separate Vite `Public/build` bundle):

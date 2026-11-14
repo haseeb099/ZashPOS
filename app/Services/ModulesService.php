@@ -516,13 +516,13 @@ class ModulesService
                 $missingCapabilities = array_values( array_diff( $requiredCapabilities, $available ) );
 
                 if ( $missingCapabilities !== [] ) {
+                    /**
+                     * Soft-disable only. Throwing here surfaces as a full-page
+                     * "Module Version Mismatch" and takes down the dashboard.
+                     * Enable() still returns a hard capability_mismatch JSON error;
+                     * the module ZIP also guards via CoreCompatibilityService.
+                     */
                     $this->disable( $module[ 'namespace' ] );
-
-                    throw new ModuleVersionMismatchException( sprintf(
-                        __( 'The module "%s" has been disabled: missing ZashPOS capabilities (%s).' ),
-                        $module[ 'name' ],
-                        implode( ', ', $missingCapabilities )
-                    ) );
                 }
             }
         }
@@ -1676,13 +1676,17 @@ class ModulesService
                 $this->options->set( 'enabled_modules', $enabledModules );
             }
 
+            if ( isset( $this->modules[ $namespace ] ) ) {
+                $this->modules[ $namespace ][ 'enabled' ] = true;
+            }
+
             /**
              * we might recreate the symlink directory
              * for the module that is about to be enabled
              */
             $this->createSymLink( $namespace );
 
-            ModulesAfterEnabledEvent::dispatch( $module );
+            ModulesAfterEnabledEvent::dispatch( $this->modules[ $namespace ] ?? $module );
             Artisan::call( 'cache:clear' );
 
             return [
@@ -1728,6 +1732,15 @@ class ModulesService
             }
 
             $this->options->set( 'enabled_modules', $enabledModules );
+
+            /**
+             * Keep the in-memory registry in sync. getEnabled() / CheckMigrationStatus
+             * read $module['enabled'], not only the options table — a stale true here
+             * after disable() can 500 the dashboard (undefined migrations, etc.).
+             */
+            if ( isset( $this->modules[ $namespace ] ) ) {
+                $this->modules[ $namespace ][ 'enabled' ] = false;
+            }
 
             ModulesAfterDisabledEvent::dispatch( $module );
 
