@@ -1579,9 +1579,22 @@ trait WithOrderTest
             return $product;
         } )->toArray();
 
+        /**
+         * Pay the tax-inclusive payable for the updated cart (qty change + exclusive VAT),
+         * not only abs(hold change) which can underpay after totals recompute.
+         */
+        $estimatedLines = collect( $order[ 'products' ] )->sum( function ( $product ) {
+            return (float) ( $product[ 'unit_price' ] ?? 0 ) * (float) ( $product[ 'quantity' ] ?? 0 );
+        } );
+        $checkoutPayment = max(
+            abs( (float) ( $order[ 'change' ] ?? 0 ) ),
+            (float) ( $order[ 'total' ] ?? 0 ),
+            $estimatedLines
+        ) * 2;
+
         $order[ 'payments' ][] = [
             'identifier' => 'cash-payment',
-            'value' => abs( $order[ 'change' ] ),
+            'value' => $checkoutPayment,
         ];
 
         $response = $this->withSession( $this->app[ 'session' ]->all() )

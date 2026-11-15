@@ -7,6 +7,7 @@ use Modules\ZashDine\Services\ModifierService;
 
 class OrderProductAfterCreatedEventListener
 {
+
     public function __construct( protected ModifierService $modifierService )
     {
         //
@@ -14,6 +15,7 @@ class OrderProductAfterCreatedEventListener
 
     public function handle( OrderProductAfterCreatedEvent $event ): void
     {
+
         $this->modifierService->syncOrderProduct( $event->orderProduct );
     }
 }

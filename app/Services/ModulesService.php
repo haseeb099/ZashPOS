@@ -183,10 +183,12 @@ class ModulesService
                 $attributes = $xmlElement->core[0]->attributes();
                 $minVersion = 'min-version';
                 $maxVersion = 'max-version';
+                $requiresCapabilities = 'requires-capabilities';
 
                 $config[ 'core' ] = [
                     'min-version' => ( (string) $attributes->$minVersion ) ?? null,
                     'max-version' => ( (string) $attributes->$maxVersion ) ?? null,
+                    'requires-capabilities' => trim( (string) ( $attributes->$requiresCapabilities ?? '' ) ),
                 ];
             }
 
@@ -506,7 +508,41 @@ class ModulesService
                     )
                 ) );
             }
+
+            $requiredCapabilities = $this->parseRequiredCapabilities( $module );
+            if ( $requiredCapabilities !== [] ) {
+                $available = config( 'nexopos.capabilities', [] );
+                $available = is_array( $available ) ? $available : [];
+                $missingCapabilities = array_values( array_diff( $requiredCapabilities, $available ) );
+
+                if ( $missingCapabilities !== [] ) {
+                    /**
+                     * Soft-disable only. Throwing here surfaces as a full-page
+                     * "Module Version Mismatch" and takes down the dashboard.
+                     * Enable() still returns a hard capability_mismatch JSON error;
+                     * the module ZIP also guards via CoreCompatibilityService.
+                     */
+                    $this->disable( $module[ 'namespace' ] );
+                }
+            }
         }
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function parseRequiredCapabilities( array $module ): array
+    {
+        $raw = trim( (string) ( $module[ 'core' ][ 'requires-capabilities' ] ?? '' ) );
+
+        if ( $raw === '' ) {
+            return [];
+        }
+
+        return array_values( array_filter( array_map(
+            static fn ( string $capability ): string => trim( $capability ),
+            explode( ',', $raw )
+        ) ) );
     }
 
     /**
@@ -1531,6 +1567,25 @@ class ModulesService
                 ], 403 );
             }
 
+            $requiredCapabilities = $this->parseRequiredCapabilities( $module );
+            if ( $requiredCapabilities !== [] ) {
+                $available = config( 'nexopos.capabilities', [] );
+                $available = is_array( $available ) ? $available : [];
+                $missingCapabilities = array_values( array_diff( $requiredCapabilities, $available ) );
+
+                if ( $missingCapabilities !== [] ) {
+                    return response()->json( [
+                        'status' => 'error',
+                        'code' => 'capability_mismatch',
+                        'message' => sprintf(
+                            __( 'The module "%s" cannot be enabled: this host is missing required ZashPOS capabilities (%s). Numeric NexoPOS version alone is not enough — use a ZashPOS build that declares them in config/nexopos.php.' ),
+                            $module[ 'name' ],
+                            implode( ', ', $missingCapabilities )
+                        ),
+                    ], 403 );
+                }
+            }
+
             /**
              * get all the modules that are
              * enabled.
@@ -1621,13 +1676,17 @@ class ModulesService
                 $this->options->set( 'enabled_modules', $enabledModules );
             }
 
+            if ( isset( $this->modules[ $namespace ] ) ) {
+                $this->modules[ $namespace ][ 'enabled' ] = true;
+            }
+
             /**
              * we might recreate the symlink directory
              * for the module that is about to be enabled
              */
             $this->createSymLink( $namespace );
 
-            ModulesAfterEnabledEvent::dispatch( $module );
+            ModulesAfterEnabledEvent::dispatch( $this->modules[ $namespace ] ?? $module );
             Artisan::call( 'cache:clear' );
 
             return [
@@ -1673,6 +1732,15 @@ class ModulesService
             }
 
             $this->options->set( 'enabled_modules', $enabledModules );
+
+            /**
+             * Keep the in-memory registry in sync. getEnabled() / CheckMigrationStatus
+             * read $module['enabled'], not only the options table — a stale true here
+             * after disable() can 500 the dashboard (undefined migrations, etc.).
+             */
+            if ( isset( $this->modules[ $namespace ] ) ) {
+                $this->modules[ $namespace ][ 'enabled' ] = false;
+            }
 
             ModulesAfterDisabledEvent::dispatch( $module );
 

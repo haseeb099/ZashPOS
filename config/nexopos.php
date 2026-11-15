@@ -13,6 +13,21 @@ return [
 
     /**
      * --------------------------------------------------------------------
+     *  ZashPOS host identity & capabilities
+     * --------------------------------------------------------------------
+     *
+     * Numeric NexoPOS version alone is not enough for ZashDine: the module
+     * needs fork hooks (canonical unit price + POS cart mergeability) added
+     * in ZashPOS Phase 4. Stock upstream 6.3.0 does not provide these.
+     */
+    'host' => 'haseeb099/ZashPOS',
+    'capabilities' => [
+        'order-product-canonical-unit-price',
+        'pos-cart-products-mergeable',
+    ],
+
+    /**
+     * --------------------------------------------------------------------
      *  Supported Languages
      * --------------------------------------------------------------------
      *

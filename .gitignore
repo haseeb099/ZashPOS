@@ -81,3 +81,8 @@ database/e2e.sqlite
 database/e2e.sqlite-journal
 database/e2e.sqlite-wal
 database/e2e.sqlite-shm
+
+# Phase 5 packaged module ZIPs
+/storage/app/zashdine-packages
+/dist/zashdine
+

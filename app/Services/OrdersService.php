@@ -230,6 +230,17 @@ class OrdersService
         $taxes = $this->__registerTaxes( $order, $fields[ 'taxes' ] ?? [] );
 
         /**
+         * Flat/variable VAT is known only after __registerTaxes. Recompute the
+         * payable total so exclusive tax is included (hold and paid paths), then
+         * reconcile payment_status against that final payable (not the pre-tax check).
+         */
+        $this->__computeOrderTotal(
+            order: $order,
+            products: collect( $orderProducts )
+        );
+        $this->__reconcilePaymentStatusWithPayableTotal( $order, $paymentStatus );
+
+        /**
          * Those fields might be used while running a listener on
          * either the create or update event of the order.
          */
@@ -1002,10 +1013,19 @@ class OrdersService
             return floatval( $product['total_price'] );
         } )->sum() )->toFloat();
 
+        $discount = ( $fields[ 'discount' ] ?? $this->computeDiscountValues( $fields[ 'discount_percentage' ] ?? 0, $subtotal ) );
+        $exclusiveOrderTax = $this->__estimateExclusiveOrderTax( $fields, $subtotal, $discount );
+
+        /**
+         * Payable used for payment validation/status must match the final
+         * tax-inclusive total (__computeOrderTotal adds exclusive tax_value).
+         * Checking against the pre-tax subtotal alone can mark £20 as paid on a £24 VAT bill.
+         */
         $total = $this->currencyService->define(
             $subtotal + $this->__getShippingFee( $fields )
         )
-            ->subtractBy( ( $fields[ 'discount' ] ?? $this->computeDiscountValues( $fields[ 'discount_percentage' ] ?? 0, $subtotal ) ) )
+            ->additionateBy( $exclusiveOrderTax )
+            ->subtractBy( $discount )
             ->subtractBy( $this->__computeOrderCoupons( $fields, $subtotal ) )
             ->toFloat();
 
@@ -1040,12 +1060,12 @@ class OrdersService
          */
         if ( $totalPayments < $total ) {
             if (
-                $this->optionsService->get( 'ns_orders_allow_partial', true ) === false &&
+                $this->__ordersOptionDisabled( 'ns_orders_allow_partial', true ) &&
                 $totalPayments > 0
             ) {
                 throw new NotAllowedException( __( 'Unable to proceed. Partially paid orders aren\'t allowed. This option could be changed on the settings.' ) );
             } elseif (
-                $this->optionsService->get( 'ns_orders_allow_incomplete', true ) === false &&
+                $this->__ordersOptionDisabled( 'ns_orders_allow_incomplete', true ) &&
                 $totalPayments === 0
             ) {
                 throw new NotAllowedException( __( 'Unable to proceed. Unpaid orders aren\'t allowed. This option could be changed on the settings.' ) );
@@ -1093,6 +1113,81 @@ class OrdersService
             'totalPayments' => $totalPayments,
             'paymentStatus' => $paymentStatus,
         ];
+    }
+
+    /**
+     * Estimate flat/variable exclusive order VAT the same way __saveOrderTaxes will,
+     * so payment checks use the tax-inclusive payable before products are persisted.
+     */
+    private function __estimateExclusiveOrderTax( array $fields, float $subtotal, float|int $discount ): float
+    {
+        $taxType = $fields[ 'tax_type' ] ?? null;
+        $posVat = $this->optionsService->get( 'ns_pos_vat' );
+
+        if (
+            $taxType !== 'exclusive'
+            || ! in_array( $posVat, [ 'flat_vat', 'variable_vat' ], true )
+            || empty( $fields[ 'taxes' ] )
+            || ! is_array( $fields[ 'taxes' ] )
+        ) {
+            return 0.0;
+        }
+
+        $rates = collect( $fields[ 'taxes' ] )
+            ->map( fn( $tax ) => (float) ( $tax[ 'rate' ] ?? 0 ) )
+            ->filter( fn( float $rate ) => $rate > 0 )
+            ->values()
+            ->toArray();
+
+        if ( $rates === [] ) {
+            return 0.0;
+        }
+
+        $taxableBase = $this->currencyService->define( $subtotal )
+            ->subtractBy( $discount )
+            ->toFloat();
+
+        $computed = $this->taxService->getTaxesComputed(
+            tax_type: 'exclusive',
+            rates: $rates,
+            value: $taxableBase
+        );
+
+        return (float) ( $computed[ 'tax' ] ?? 0 );
+    }
+
+    /**
+     * Order settings are stored as yes/no strings in Options.
+     */
+    private function __ordersOptionDisabled( string $key, mixed $default = true ): bool
+    {
+        $value = $this->optionsService->get( $key, $default );
+
+        return $value === false || $value === 'no' || $value === 0 || $value === '0';
+    }
+
+    /**
+     * After taxes are registered and the payable total is final, payment_status must
+     * match tendered vs that total (never leave PAID when exclusive VAT pushed the bill up).
+     */
+    private function __reconcilePaymentStatusWithPayableTotal( Order $order, string $initialPaymentStatus ): void
+    {
+        $tendered = (float) $order->tendered;
+        $payable = (float) $order->total;
+
+        if ( $initialPaymentStatus === Order::PAYMENT_HOLD && $tendered <= 0 ) {
+            $order->payment_status = Order::PAYMENT_HOLD;
+        } elseif ( $tendered >= $payable && $tendered > 0 ) {
+            $order->payment_status = Order::PAYMENT_PAID;
+        } elseif ( $tendered > 0 && $tendered < $payable ) {
+            $order->payment_status = Order::PAYMENT_PARTIALLY;
+        } elseif ( $tendered <= 0 && $initialPaymentStatus !== Order::PAYMENT_HOLD ) {
+            $order->payment_status = Order::PAYMENT_UNPAID;
+        }
+
+        $order->change = Currency::fresh( $order->tendered )
+            ->subtractBy( $order->total )
+            ->toFloat();
     }
 
     /**

@@ -7,6 +7,7 @@ use Modules\ZashDine\Services\ModifierService;
 
 class ProductAfterCreatedEventListener
 {
+
     public function __construct( protected ModifierService $modifierService )
     {
         //
@@ -14,6 +15,7 @@ class ProductAfterCreatedEventListener
 
     public function handle( ProductAfterCreatedEvent $event ): void
     {
+
         $this->modifierService->syncPendingProductGroups( $event->product );
     }
 }

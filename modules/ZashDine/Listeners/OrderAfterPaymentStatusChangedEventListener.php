@@ -9,6 +9,7 @@ use Modules\ZashDine\Services\ModifierService;
 
 class OrderAfterPaymentStatusChangedEventListener
 {
+
     public function __construct(
         protected DineInTableService $dineInTableService,
         protected ModifierService $modifierService,
@@ -18,6 +19,7 @@ class OrderAfterPaymentStatusChangedEventListener
 
     public function handle( OrderAfterPaymentStatusChangedEvent $event ): void
     {
+
         if ( $event->previous === Order::PAYMENT_HOLD && $event->new !== Order::PAYMENT_HOLD ) {
             $this->modifierService->applyModifierStockAfterLeavingHold( $event->order );
         }

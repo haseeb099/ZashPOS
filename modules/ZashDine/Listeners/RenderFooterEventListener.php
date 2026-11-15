@@ -3,11 +3,16 @@
 namespace Modules\ZashDine\Listeners;
 
 use App\Events\RenderFooterEvent;
+use Modules\ZashDine\Services\CoreCompatibilityService;
 
 class RenderFooterEventListener
 {
     public function handle( RenderFooterEvent $event ): void
     {
+        if ( ! CoreCompatibilityService::operationsAllowed() ) {
+            return;
+        }
+
         if ( $event->routeName === 'zash-dine.floor' ) {
             $event->output->addView( 'ZashDine::popups-script' );
             $event->output->addView( 'ZashDine::floor-script' );
