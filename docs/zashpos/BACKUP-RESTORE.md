@@ -9,7 +9,7 @@
 | `sqlite` | Snapshot via `PRAGMA wal_checkpoint(FULL)` + `VACUUM INTO` (includes committed WAL data), plus a `storage/app` mirror |
 | `mysql` / `pgsql` / other | **Rejected** — command exits non-zero. Use host `mysqldump` / `pg_dump` (examples below). Never invents a placeholder SQL dump. |
 
-Archives never include `.env`. Restore rejects archives that contain `.env`, placeholder `sql_dump`, or lack `database.sqlite` + `manifest.json` **before** modifying restore targets.
+Archives never include `.env`. Restore rejects archives that contain `.env`, placeholder `sql_dump`, or lack `database.sqlite` + `manifest.json` **before** modifying restore targets. After extract, restore opens the snapshot and requires `PRAGMA integrity_check = ok` (rejects truncated/corrupt DB files that still carry a valid SQLite header). `File::copyDirectory` failures abort backup/restore (non-zero exit; incomplete ZIP is discarded).
 
 ## What is backed up
 

@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
+use PDO;
 use RuntimeException;
 use Throwable;
 use ZipArchive;
@@ -67,7 +68,9 @@ class RestoreInstanceCommand extends Command
                 if ( File::isDirectory( $target ) ) {
                     File::deleteDirectory( $target );
                 }
-                File::copyDirectory( $directory, $target );
+                if ( ! File::copyDirectory( $directory, $target ) ) {
+                    throw new RuntimeException( 'Failed to restore storage directory: ' . $basename );
+                }
             }
             foreach ( File::files( $storageMirror ) as $file ) {
                 if ( ! File::copy( $file->getPathname(), $appStorage . DIRECTORY_SEPARATOR . $file->getFilename() ) ) {
@@ -152,8 +155,36 @@ class RestoreInstanceCommand extends Command
             throw new RuntimeException( 'database.sqlite is not a valid SQLite database file.' );
         }
 
+        $this->assertSqliteIntegrity( $sqliteSource );
+
         if ( ! File::isDirectory( $extractRoot . DIRECTORY_SEPARATOR . 'storage-app' ) ) {
             throw new RuntimeException( 'Archive missing storage-app mirror.' );
+        }
+    }
+
+    /**
+     * Reject unreadable, truncated, or corrupt SQLite snapshots before any target writes.
+     */
+    private function assertSqliteIntegrity( string $sqliteSource ): void
+    {
+        try {
+            $pdo = new PDO( 'sqlite:' . $sqliteSource, null, null, [
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+            ] );
+            $check = $pdo->query( 'PRAGMA integrity_check' )->fetchColumn();
+            $pdo = null;
+        } catch ( Throwable $e ) {
+            throw new RuntimeException(
+                'database.sqlite is unreadable or corrupt: ' . $e->getMessage(),
+                0,
+                $e
+            );
+        }
+
+        if ( $check !== 'ok' ) {
+            throw new RuntimeException(
+                'database.sqlite failed PRAGMA integrity_check (' . ( is_string( $check ) ? $check : 'unknown' ) . ').'
+            );
         }
     }
 

@@ -192,6 +192,106 @@ class ZashPosBackupRestoreTest extends TestCase
         File::deleteDirectory( $dir );
     }
 
+    public function test_backup_fails_when_storage_directory_copy_returns_false(): void
+    {
+        $backupRoot = base_path( 'storage/framework/testing/zashpos-copy-fail-backups' );
+        $storageSource = base_path( 'storage/framework/testing/zashpos-copy-fail-storage' );
+
+        File::deleteDirectory( $backupRoot );
+        File::deleteDirectory( $storageSource );
+        File::ensureDirectoryExists( $backupRoot );
+        File::ensureDirectoryExists( $storageSource . DIRECTORY_SEPARATOR . 'payload' );
+        File::put( $storageSource . DIRECTORY_SEPARATOR . 'payload' . DIRECTORY_SEPARATOR . 'a.txt', 'copy-fail-probe' );
+
+        File::partialMock()
+            ->shouldReceive( 'copyDirectory' )
+            ->andReturn( false );
+
+        $exit = Artisan::call( 'zashpos:backup', [
+            '--path' => $backupRoot,
+            '--label' => 'copyfail',
+            '--storage-app' => $storageSource,
+        ] );
+
+        $this->assertSame( 1, $exit );
+        $this->assertStringContainsString( 'Failed to copy storage directory', Artisan::output() );
+        $this->assertEmpty( File::glob( $backupRoot . DIRECTORY_SEPARATOR . 'zashpos-backup-*-copyfail.zip' ) );
+
+        File::deleteDirectory( $backupRoot );
+        File::deleteDirectory( $storageSource );
+    }
+
+    public function test_restore_rejects_valid_header_but_corrupt_sqlite_without_touching_targets(): void
+    {
+        $dir = base_path( 'storage/framework/testing/zashpos-corrupt' );
+        File::deleteDirectory( $dir );
+        File::ensureDirectoryExists( $dir );
+        File::ensureDirectoryExists( $dir . DIRECTORY_SEPARATOR . 'storage-app' . DIRECTORY_SEPARATOR . 'proof' );
+        File::put( $dir . DIRECTORY_SEPARATOR . 'storage-app' . DIRECTORY_SEPARATOR . 'proof' . DIRECTORY_SEPARATOR . 'probe.txt', 'from-archive' );
+        File::put(
+            $dir . DIRECTORY_SEPARATOR . 'manifest.json',
+            json_encode( [
+                'db_connection' => 'sqlite',
+                'sqlite_snapshot' => 'vacuum-into',
+                'includes_env' => false,
+            ], JSON_PRETTY_PRINT ) . PHP_EOL
+        );
+
+        // Valid SQLite header bytes, but truncated/corrupt page data so integrity_check fails.
+        $corruptSqlite = "SQLite format 3\0"
+            . str_repeat( "\x00", 80 )
+            . random_bytes( 256 );
+        File::put( $dir . DIRECTORY_SEPARATOR . 'database.sqlite', $corruptSqlite );
+
+        $badZip = $dir . DIRECTORY_SEPARATOR . 'corrupt.zip';
+        $zip = new \ZipArchive;
+        $this->assertTrue( $zip->open( $badZip, \ZipArchive::CREATE ) === true );
+        $zip->addFile( $dir . DIRECTORY_SEPARATOR . 'manifest.json', 'manifest.json' );
+        $zip->addFile( $dir . DIRECTORY_SEPARATOR . 'database.sqlite', 'database.sqlite' );
+        $zip->addFile(
+            $dir . DIRECTORY_SEPARATOR . 'storage-app' . DIRECTORY_SEPARATOR . 'proof' . DIRECTORY_SEPARATOR . 'probe.txt',
+            'storage-app/proof/probe.txt'
+        );
+        $zip->close();
+
+        $targetDb = $dir . DIRECTORY_SEPARATOR . 'existing-target.sqlite';
+        $targetStorage = $dir . DIRECTORY_SEPARATOR . 'existing-storage';
+        File::put( $targetDb, "SQLite format 3\0pre-existing-target-marker\n" );
+        File::ensureDirectoryExists( $targetStorage . DIRECTORY_SEPARATOR . 'keep-dir' );
+        File::put( $targetStorage . DIRECTORY_SEPARATOR . 'keep-dir' . DIRECTORY_SEPARATOR . 'keep.txt', 'must-remain' );
+        $dbHashBefore = hash_file( 'sha256', $targetDb );
+        $storageHashBefore = hash_file(
+            'sha256',
+            $targetStorage . DIRECTORY_SEPARATOR . 'keep-dir' . DIRECTORY_SEPARATOR . 'keep.txt'
+        );
+
+        $exit = Artisan::call( 'zashpos:restore', [
+            'archive' => $badZip,
+            '--force' => true,
+            '--database' => $targetDb,
+            '--storage-app' => $targetStorage,
+        ] );
+
+        $this->assertSame( 1, $exit );
+        $output = Artisan::output();
+        $this->assertTrue(
+            str_contains( $output, 'integrity_check' )
+            || str_contains( $output, 'unreadable or corrupt' )
+            || str_contains( $output, 'corrupt' ),
+            'Expected integrity failure message, got: ' . $output
+        );
+        $this->assertSame( $dbHashBefore, hash_file( 'sha256', $targetDb ), 'Existing target DB must remain unchanged.' );
+        $this->assertSame(
+            $storageHashBefore,
+            hash_file( 'sha256', $targetStorage . DIRECTORY_SEPARATOR . 'keep-dir' . DIRECTORY_SEPARATOR . 'keep.txt' ),
+            'Existing target storage must remain unchanged.'
+        );
+        $this->assertSame( 'must-remain', File::get( $targetStorage . DIRECTORY_SEPARATOR . 'keep-dir' . DIRECTORY_SEPARATOR . 'keep.txt' ) );
+        $this->assertFileDoesNotExist( $targetStorage . DIRECTORY_SEPARATOR . 'proof' . DIRECTORY_SEPARATOR . 'probe.txt' );
+
+        File::deleteDirectory( $dir );
+    }
+
     private function absoluteSqlitePath(): string
     {
         $database = (string) config( 'database.connections.sqlite.database' );

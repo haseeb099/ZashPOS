@@ -198,7 +198,9 @@ class BackupInstanceCommand extends Command
 
             $target = $destination . DIRECTORY_SEPARATOR . $basename;
             File::ensureDirectoryExists( $target );
-            File::copyDirectory( $directory, $target );
+            if ( ! File::copyDirectory( $directory, $target ) ) {
+                throw new RuntimeException( 'Failed to copy storage directory: ' . $basename );
+            }
         }
 
         foreach ( File::files( $source ) as $file ) {
