@@ -135,7 +135,11 @@ Configure receipt columns under invoice settings (`ns_invoice_receipt_column_a` 
 | Kitchen ticket on a physical kitchen printer or KDS tablet | **Needs hardware** — kitchen UI is on-screen; no dedicated ESC/POS driver in ZashDine yet |
 | Tablet touch + print from Floor/Kitchen at venue DPI | **Needs hardware** — viewport E2E covers layout only |
 
+## Deployment readiness
+
+See [DEPLOYMENT.md](DEPLOYMENT.md), [BACKUP-RESTORE.md](BACKUP-RESTORE.md), and [RELEASE-ROLLBACK.md](RELEASE-ROLLBACK.md). Local staging proves ZIP Modules upload, workflow smoke, and backup restore; remote host/TLS still required for a shared staging URL. Hardware print/tablet gates remain as in the table above.
+
 ## Status
-Phases 0–4 merged to master (Phase 4 merge `3c6dfce9e`). Phase 5 packaging/validation on `phase-5-package-validation` — completion boxes stay unticked until verified.
+Phases 0–4 and Phase 5 packaging (`afca66362`) are on master. Deployment-readiness continues on `phase-5-deployment-readiness` — Phase 5 completion boxes stay unticked until verified.
 
 POS dine-in opens `#zash-dine-table-picker` when the cart has no table yet; reopened/held dine-in orders keep `zash_dine_table_id` and skip the picker. Confirm re-checks `/api/zash-dine/tables/available` before resolve; a race clears the selection, keeps a visible notice while the list refreshes, and requires choosing an available table again. Floor note/cancel use `#zash-dine-note-popup` / `#zash-dine-cancel-meal-popup` and close only after a successful API response (errors stay in the popup). Popup shells are capped to the viewport (`min(36rem, 100vw-2rem)` / `min(80vh, 100vh-2rem)`) so tablet footers stay reachable.

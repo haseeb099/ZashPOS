@@ -62,8 +62,12 @@ Evidence: `storage/logs/phase5-clean-install.txt` and the clean tree’s `storag
 
 ZashDine injects POS/Floor/Kitchen/popup behaviour through Blade scripts (`@module` views via `RenderFooterEvent`). There is no module Vite `Public/build` manifest to compile before packaging. Core dashboard/POS assets still need `npm run build` on the host ZashPOS.
 
+## Deployment follow-on
+
+After packaging, use [DEPLOYMENT.md](DEPLOYMENT.md) for isolated staging (`scripts/setup-staging-instance.ps1`), browser Modules upload (`scripts/browser-modules-upload.mjs`), workflow smoke (`scripts/staging-workflow-smoke.php`), and backup/restore proof (`scripts/prove-backup-restore.ps1`).
+
 ## Out of scope
 
-- Live client deployment
+- Live client deployment / purchasing hosting
 - ZashMarket licence delivery
-- Merging this PR without review
+- Merging deployment PRs without review
