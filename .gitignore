@@ -86,3 +86,12 @@ database/e2e.sqlite-shm
 /storage/app/zashdine-packages
 /dist/zashdine
 
+# ZashPOS instance backups
+/storage/app/zashpos-backups
+/storage/app/zashpos-backups-test
+
+
+# ZashPOS instance backups
+/storage/app/zashpos-backups
+/storage/app/zashpos-backups-test
+

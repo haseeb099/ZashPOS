@@ -69,6 +69,13 @@ if ( env( 'APP_DEBUG' ) ) {
     include dirname( __FILE__ ) . '/debug.php';
 }
 
+/**
+ * Load-balancer / uptime probe. Unauthenticated, no session required.
+ */
+Route::get( '/up', function () {
+    return response( 'OK', 200 )->header( 'Content-Type', 'text/plain' );
+} );
+
 Route::get( 'wizard', function () {
     $wizard = new WizardService(
         title: 'Example',
