@@ -46,8 +46,10 @@ Committed templates under `deploy/` contain **placeholders only**.
 4. Install ZashDine ZIP via Modules UI (or validated package path); `php artisan modules:migrate ZashDine --force`
 5. Enable Supervisor programs + cron; confirm `php artisan tinker --execute "echo config('broadcasting.default');"` → `reverb`
 6. Smoke: `/up`, login, Floor, Kitchen (two browsers), one dine-in pay, receipt HTML
-7. Backup drill for the **actual** engine — MySQL: [BACKUP-RESTORE.md](BACKUP-RESTORE.md) § MySQL; never claim `zashpos:backup` covers MySQL
+7. Backup drill for the **actual** engine — MySQL: [BACKUP-RESTORE.md](BACKUP-RESTORE.md) § MySQL; run `scripts/proof-mysql-backup-restore.sh` (unique/absent target schema, separate storage tar + manifest hashes). Never claim `zashpos:backup` covers MySQL. Until that host run succeeds, treat **remote MySQL restore as pending**.
 
 ## Evidence to record (no secrets)
 
 Write local-only JSON under `storage/logs/` (gitignored) with: git SHA, staging hostname (not passwords), TLS issuer, `GET /up` status, Supervisor unit names, backup proof path, Playwright report path. Never include `APP_KEY`, DB passwords, or admin passwords.
+
+Local prep evidence may record Playwright + MySQL **input-safety regressions** only; do not claim a completed remote MySQL restore until the proof script exits 0 against the staging engine.

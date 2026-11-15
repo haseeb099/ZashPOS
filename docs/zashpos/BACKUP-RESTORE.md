@@ -45,22 +45,33 @@ unset MYSQL_PWD
 Restore into an **isolated** schema (never overwrite the live schema for a drill):
 
 ```bash
-mysql -e "CREATE DATABASE zashpos_restore_drill CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-mysql zashpos_restore_drill < /var/backups/zashpos/db-….sql
-# Copy storage/app mirror into a disposable directory; assert source files unchanged.
+# Create a NEW empty schema only — do not DROP an existing database to reuse its name.
+mysql -e "CREATE DATABASE zashpos_rstr_YYYYMMDD_xxxx CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+mysql zashpos_rstr_YYYYMMDD_xxxx < /var/backups/zashpos/db-….sql
+# Restore uploads from a separate storage archive into a fresh disposable directory
+# (never rm -rf an arbitrary existing path; verify file hashes against the archive manifest).
 ```
 
 Automated proof script (requires `mysqldump`/`mysql` + env vars; writes gitignored evidence):
 
 ```bash
 # On the staging host or a workstation with DB access:
-export MYSQL_HOST=… MYSQL_USER=… MYSQL_PASSWORD=… 
+export MYSQL_HOST=… MYSQL_USER=… MYSQL_PASSWORD=…
 export MYSQL_SOURCE_DATABASE=zashpos_staging
-export MYSQL_TARGET_DATABASE=zashpos_restore_drill
+# MYSQL_TARGET_DATABASE optional: must be a safe identifier and must NOT already exist.
+# If omitted, a unique zashpos_rstr_* name is generated. The script never DROP-replaces
+# a caller-supplied existing schema.
 ./scripts/proof-mysql-backup-restore.sh
 ```
 
-Evidence: `storage/logs/phase5-mysql-backup-restore-proof.json`. Asserts restored proof **row** + uploaded **file** bytes; source DB row count and source marker file unchanged.
+Safety regressions (no MySQL required; must fail before dump/DROP/`rm -rf`):
+
+```bash
+./scripts/proof-mysql-backup-restore-regressions.sh
+# Windows: .\scripts\proof-mysql-backup-restore.ps1 -Regressions
+```
+
+Evidence: `storage/logs/phase5-mysql-backup-restore-proof.json`. Distinguishes intentional source **fixture create/cleanup** from **unchanged-during-restore** checks. Asserts restored synthetic proof row **and** representative application table names/counts; storage is restored only from a separate tar + SHA-256 manifest. **Real staging MySQL restore remains pending** until host access + credentials exist.
 
 ### Secret / APP_KEY recovery (document only — no secrets in Git)
 
