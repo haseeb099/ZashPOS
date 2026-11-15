@@ -9,11 +9,11 @@
 
 ## Update an existing client / staging host
 
-1. `php artisan zashpos:backup --label=pre-update`
+1. On SQLite hosts: `php artisan zashpos:backup --label=pre-update`. On MySQL/Postgres: take a real `mysqldump`/`pg_dump` (zashpos:backup refuses non-SQLite).
 2. Upload the new ZIP via Dashboard → Modules → Upload (or replace `modules/ZashDine` only when intentionally bypassing Modules UI).
-3. `php artisan modules:migrate ZashDine --force`
+3. `php artisan modules:migrate ZashDine`
 4. `php artisan optimize:clear` (and rebuild front-end assets if the **host** changed).
-5. Smoke: `/up`, login, Floor, Kitchen, one dine-in pay path, receipt HTML.
+5. Smoke: `/up`, login, Floor, Kitchen, one dine-in pay path, receipt HTML. Confirm `config('broadcasting.default')` is `reverb` when Reverb is required.
 
 ## Host (core) update
 
@@ -28,7 +28,7 @@
 | Layer | Action |
 | --- | --- |
 | Module only | Re-upload previous ZIP (known SHA-256) or restore `modules/ZashDine` from pre-update backup; re-run module migrations if needed |
-| Data | `php artisan zashpos:restore {pre-update.zip} --force` on a **stopped** app (or restore SQL dump) |
+| Data | SQLite: `php artisan zashpos:restore {pre-update.zip} --force` on a **stopped** app. MySQL/Postgres: restore the host SQL dump (not zashpos:restore). |
 | Host code | `git checkout` / redeploy previous release tag; `composer install`; restart workers |
 
 Never force-push client hosts. Prefer forward fixes when migrations are irreversible; keep pre-update backups until the new build is verified.

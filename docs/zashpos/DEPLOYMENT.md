@@ -10,7 +10,7 @@ This document prepares a **staging** installation. It does **not** purchase host
 | `.env.example` | Local defaults (`BROADCAST_DRIVER=log`, `QUEUE_CONNECTION=sync`) — insufficient for production Reverb/queues |
 | `.env.production.example` | New committed template (no secrets) for SSL-facing staging/production |
 | `routes/console.php` | Scheduler already defines NexoPOS jobs when installed |
-| Health | Laravel `/up` registered in `bootstrap/app.php` |
+| Health | `GET /up` registered in `routes/web.php` |
 | Packaging | `php artisan zash-dine:package` + [PACKAGING.md](PACKAGING.md) |
 
 **Access still needed for a remote staging host:** SSH (or panel) to a VPS/PaaS, a DNS name with TLS certificates, outbound SMTP (optional), and firewall rules for HTTPS + Reverb (or a reverse-proxy WebSocket path). Until that exists, complete local staging only.
@@ -58,7 +58,7 @@ Copy `.env.production.example` → server `.env`, then set:
 2. **Database** — MySQL/MariaDB credentials; never commit them
 3. **Queue workers** — `QUEUE_CONNECTION=database` (or Redis) + `php artisan queue:work --sleep=1 --tries=3` under Supervisor/systemd
 4. **Scheduler** — cron `* * * * * php /path/artisan schedule:run`
-5. **Reverb** — `BROADCAST_CONNECTION=reverb`, app key/secret, TLS-terminated `REVERB_HOST` / port 443 via reverse proxy; process `php artisan reverb:start`
+5. **Reverb** — `BROADCAST_DRIVER=reverb` (this is what `config/broadcasting.php` reads — not `BROADCAST_CONNECTION`), app key/secret, TLS-terminated `REVERB_HOST` / port 443 via reverse proxy; process `php artisan reverb:start`. Confirm with `php artisan tinker --execute "echo config('broadcasting.default');"` → `reverb`
 6. **Logging** — `LOG_CHANNEL=stack`, `LOG_LEVEL=info` (or `warning` in steady state); ship `storage/logs/laravel.log`
 7. **Health** — probe `GET /up` from the load balancer
 8. **Assets** — `composer install --no-dev -o`, `npm ci && npm run build`, `php artisan storage:link`

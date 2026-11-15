@@ -3,18 +3,11 @@
 /**
  * API smoke after ZashDine is installed on a staging tree.
  * Run from the staging root: php path\to\staging-workflow-smoke.php
+ *
+ * Every claim below is an assertion that fails the process on mismatch.
  */
-$base = getcwd();
-if ( ! is_file( $base . '/artisan' ) ) {
-    fwrite( STDERR, "Run from the staging instance root (directory that contains artisan).\n" );
-    exit( 1 );
-}
 
-require $base . '/vendor/autoload.php';
-$app = require $base . '/bootstrap/app.php';
-$kernel = $app->make( Kernel::class );
-$kernel->bootstrap();
-
+use App\Exceptions\NotAllowedException;
 use App\Models\Customer;
 use App\Models\Order;
 use App\Models\OrderPayment;
@@ -38,10 +31,28 @@ use Modules\ZashDine\Services\DineInTableService;
 use Modules\ZashDine\Services\KitchenService;
 use Modules\ZashDine\Services\ModifierService;
 
+$base = getcwd();
+if ( ! is_file( $base . '/artisan' ) ) {
+    fwrite( STDERR, "Run from the staging instance root (directory that contains artisan).\n" );
+    exit( 1 );
+}
+
+require $base . '/vendor/autoload.php';
+$app = require $base . '/bootstrap/app.php';
+$kernel = $app->make( Kernel::class );
+$kernel->bootstrap();
+
 function fail( string $message ): void
 {
     fwrite( STDERR, $message . PHP_EOL );
     exit( 1 );
+}
+
+function assertTrue( bool $condition, string $message ): void
+{
+    if ( ! $condition ) {
+        fail( $message );
+    }
 }
 
 if ( ! is_dir( base_path( 'modules/ZashDine' ) ) ) {
@@ -49,18 +60,14 @@ if ( ! is_dir( base_path( 'modules/ZashDine' ) ) ) {
 }
 
 $admin = User::query()->first();
-if ( ! $admin ) {
-    fail( 'no users' );
-}
+assertTrue( $admin instanceof User, 'no users' );
 Auth::login( $admin );
 
 if ( Product::query()->count() < 2 ) {
     passthru( 'php artisan db:seed --class=Database\\Seeders\\DefaultUnitGroupSeeder --force --no-interaction', $unitExit );
     passthru( 'php artisan ns:categories:generate --count=4 --no-interaction', $catExit );
     passthru( 'php artisan ns:products:generate --count=30 --no-interaction', $prodExit );
-    if ( $unitExit !== 0 || $catExit !== 0 || $prodExit !== 0 ) {
-        fail( 'product seed failed' );
-    }
+    assertTrue( $unitExit === 0 && $catExit === 0 && $prodExit === 0, 'product seed failed' );
 }
 
 Product::query()->update( [ 'stock_management' => Product::STOCK_MANAGEMENT_ENABLED ] );
@@ -73,10 +80,7 @@ $products = Product::query()
     ->with( 'unit_quantities' )
     ->limit( 2 )
     ->get();
-
-if ( $products->count() < 2 ) {
-    fail( 'need >=2 products with unit quantities' );
-}
+assertTrue( $products->count() >= 2, 'need >=2 products with unit quantities' );
 
 $meal = $products[0];
 $ingredient = $products[1];
@@ -126,19 +130,33 @@ if ( Schema::hasTable( 'zash_dine_kitchen_categories' ) && $meal->category_id ) 
     );
 }
 
-$customer = Customer::query()->first();
-if ( ! $customer ) {
-    $customer = Customer::factory()->create( [
-        'author_id' => $admin->id,
-    ] );
-}
-$mealQtyBefore = (float) ProductUnitQuantity::query()->whereKey( $mealUnit->id )->value( 'quantity' );
-$ingQtyBefore = (float) ProductUnitQuantity::query()->whereKey( $ingredientUnit->id )->value( 'quantity' );
-$historyBefore = ProductHistory::query()->whereIn( 'product_id', [ $meal->id, $ingredient->id ] )->count();
+$customer = Customer::query()->first() ?? Customer::factory()->create( [ 'author_id' => $admin->id ] );
+$mealQtyBaseline = (float) ProductUnitQuantity::query()->whereKey( $mealUnit->id )->value( 'quantity' );
+$ingQtyBaseline = (float) ProductUnitQuantity::query()->whereKey( $ingredientUnit->id )->value( 'quantity' );
 
 $unitPrice = (float) ( $mealUnit->sale_price ?: $mealUnit->sale_price_edit ?: 5 ) + 1.5;
 /** @var OrdersService $orders */
 $orders = app( OrdersService::class );
+
+$productLine = [
+    'product_id' => $meal->id,
+    'name' => $meal->name,
+    'quantity' => 1,
+    'unit_price' => $unitPrice,
+    'total_price' => $unitPrice,
+    'unit_quantity_id' => $mealUnit->id,
+    'unit_id' => $mealUnit->unit_id,
+    'discount' => 0,
+    'discount_type' => 'percentage',
+    'discount_percentage' => 0,
+    'mode' => 'normal',
+    'zash_dine_modifiers' => [[ 'modifier_id' => $modifier->id, 'quantity' => 1 ]],
+];
+
+$addresses = [
+    'shipping' => [ 'first_name' => 'Staging', 'last_name' => 'Waiter', 'country' => 'GB' ],
+    'billing' => [ 'first_name' => 'Staging', 'last_name' => 'Waiter', 'country' => 'GB' ],
+];
 
 $hold = $orders->create( [
     'customer_id' => $customer->id,
@@ -151,54 +169,30 @@ $hold = $orders->create( [
     'shipping' => 0,
     'payment_status' => Order::PAYMENT_HOLD,
     'author_id' => $admin->id,
-    'addresses' => [
-        'shipping' => [ 'first_name' => 'Staging', 'last_name' => 'Waiter', 'country' => 'GB' ],
-        'billing' => [ 'first_name' => 'Staging', 'last_name' => 'Waiter', 'country' => 'GB' ],
-    ],
-    'products' => [[
-        'product_id' => $meal->id,
-        'name' => $meal->name,
-        'quantity' => 1,
-        'unit_price' => $unitPrice,
-        'total_price' => $unitPrice,
-        'unit_quantity_id' => $mealUnit->id,
-        'unit_id' => $mealUnit->unit_id,
-        'discount' => 0,
-        'discount_type' => 'percentage',
-        'discount_percentage' => 0,
-        'mode' => 'normal',
-        'zash_dine_modifiers' => [[ 'modifier_id' => $modifier->id, 'quantity' => 1 ]],
-    ]],
+    'addresses' => $addresses,
+    'products' => [ $productLine ],
     'coupons' => [],
     'payments' => [],
 ] );
 
 $order = $hold['data']['order'] ?? null;
-if ( ! is_object( $order ) && ! is_array( $order ) ) {
-    fail( 'hold create failed: ' . json_encode( $hold ) );
-}
+assertTrue( is_object( $order ) || is_array( $order ), 'hold create failed: ' . json_encode( $hold ) );
 $orderId = (int) ( is_array( $order ) ? $order['id'] : $order->id );
 $orderModel = Order::query()->findOrFail( $orderId );
-if ( $orderModel->payment_status !== Order::PAYMENT_HOLD ) {
-    fail( 'expected hold status' );
-}
-
+assertTrue( $orderModel->payment_status === Order::PAYMENT_HOLD, 'expected hold status' );
 $table->refresh();
-if ( $table->status !== DiningTable::STATUS_OCCUPIED ) {
-    fail( 'table not occupied after hold' );
-}
+assertTrue( $table->status === DiningTable::STATUS_OCCUPIED, 'table not occupied after hold' );
 
 $ticket = OrderItem::query()->where( 'order_id', $orderId )->first();
-if ( ! $ticket ) {
-    fail( 'kitchen ticket missing' );
-}
+assertTrue( $ticket instanceof OrderItem, 'kitchen ticket missing' );
 
 /** @var KitchenService $kitchenService */
 $kitchenService = app( KitchenService::class );
 $kitchenService->transition( $ticket, OrderItem::STATUS_PREPARING, $admin );
 $kitchenService->transition( $ticket->fresh(), OrderItem::STATUS_READY, $admin );
+$ticket->refresh();
+assertTrue( $ticket->status === OrderItem::STATUS_READY, 'kitchen ticket not persisted as READY, got ' . $ticket->status );
 
-// Cancel path on a second unpaid dine-in hold (stock restore check)
 $table2 = DiningTable::query()->create( [
     'area_id' => $area->id,
     'name' => 'T-' . substr( uniqid(), -4 ),
@@ -206,7 +200,10 @@ $table2 = DiningTable::query()->create( [
     'status' => DiningTable::STATUS_AVAILABLE,
     'author_id' => $admin->id,
 ] );
-$cancelHold = $orders->create( [
+$mealBeforeNonHold = (float) ProductUnitQuantity::query()->whereKey( $mealUnit->id )->value( 'quantity' );
+$ingBeforeNonHold = (float) ProductUnitQuantity::query()->whereKey( $ingredientUnit->id )->value( 'quantity' );
+
+$nonHold = $orders->create( [
     'customer_id' => $customer->id,
     'type' => [ 'identifier' => 'dine-in' ],
     'zash_dine_table_id' => $table2->id,
@@ -215,40 +212,49 @@ $cancelHold = $orders->create( [
     'discount' => 0,
     'total_coupons' => 0,
     'shipping' => 0,
-    'payment_status' => Order::PAYMENT_HOLD,
     'author_id' => $admin->id,
-    'addresses' => [
-        'shipping' => [ 'first_name' => 'Cancel', 'last_name' => 'Path', 'country' => 'GB' ],
-        'billing' => [ 'first_name' => 'Cancel', 'last_name' => 'Path', 'country' => 'GB' ],
-    ],
-    'products' => [[
-        'product_id' => $meal->id,
-        'name' => $meal->name,
-        'quantity' => 1,
-        'unit_price' => $unitPrice,
-        'total_price' => $unitPrice,
-        'unit_quantity_id' => $mealUnit->id,
-        'unit_id' => $mealUnit->unit_id,
-        'discount' => 0,
-        'discount_type' => 'percentage',
-        'discount_percentage' => 0,
-        'mode' => 'normal',
-        'zash_dine_modifiers' => [[ 'modifier_id' => $modifier->id, 'quantity' => 1 ]],
-    ]],
+    'addresses' => $addresses,
+    'products' => [ $productLine ],
     'coupons' => [],
     'payments' => [],
 ] );
-$cancelOrderId = (int) ( is_array( $cancelHold['data']['order'] ) ? $cancelHold['data']['order']['id'] : $cancelHold['data']['order']->id );
-$cancelTicket = OrderItem::query()->where( 'order_id', $cancelOrderId )->first();
-if ( ! $cancelTicket ) {
-    fail( 'cancel path ticket missing' );
-}
-$beforeCancelMeal = (float) ProductUnitQuantity::query()->whereKey( $mealUnit->id )->value( 'quantity' );
+$nonHoldId = (int) ( is_array( $nonHold['data']['order'] ) ? $nonHold['data']['order']['id'] : $nonHold['data']['order']->id );
+$nonHoldOrder = Order::query()->findOrFail( $nonHoldId );
+assertTrue( $nonHoldOrder->payment_status !== Order::PAYMENT_HOLD, 'cancel-proof order must not be hold' );
+
+$mealAfterNonHold = (float) ProductUnitQuantity::query()->whereKey( $mealUnit->id )->value( 'quantity' );
+$ingAfterNonHold = (float) ProductUnitQuantity::query()->whereKey( $ingredientUnit->id )->value( 'quantity' );
+assertTrue(
+    abs( ( $mealBeforeNonHold - $mealAfterNonHold ) - 1.0 ) < 0.0001,
+    "non-hold create must deduct meal stock by 1 (before={$mealBeforeNonHold}, after={$mealAfterNonHold})"
+);
+assertTrue(
+    abs( ( $ingBeforeNonHold - $ingAfterNonHold ) - 1.0 ) < 0.0001,
+    "non-hold create must deduct ingredient stock by 1 (before={$ingBeforeNonHold}, after={$ingAfterNonHold})"
+);
+
+$cancelTicket = OrderItem::query()->where( 'order_id', $nonHoldId )->first();
+assertTrue( $cancelTicket instanceof OrderItem, 'cancel path ticket missing' );
 app( DineInTableService::class )->cancelOrderItem( $cancelTicket );
-$afterCancelMeal = (float) ProductUnitQuantity::query()->whereKey( $mealUnit->id )->value( 'quantity' );
+$mealAfterCancel = (float) ProductUnitQuantity::query()->whereKey( $mealUnit->id )->value( 'quantity' );
+$ingAfterCancel = (float) ProductUnitQuantity::query()->whereKey( $ingredientUnit->id )->value( 'quantity' );
+assertTrue(
+    abs( $mealAfterCancel - $mealBeforeNonHold ) < 0.0001,
+    "cancel must restore meal stock (expected {$mealBeforeNonHold}, got {$mealAfterCancel})"
+);
+assertTrue(
+    abs( $ingAfterCancel - $ingBeforeNonHold ) < 0.0001,
+    "cancel must restore ingredient stock (expected {$ingBeforeNonHold}, got {$ingAfterCancel})"
+);
 
 ns()->option->set( 'ns_orders_allow_partial', 'no' );
-$underpayRejected = false;
+$ordersBeforeUnderpay = Order::query()->count();
+$paymentsBeforeUnderpay = OrderPayment::query()->count();
+$modifiersBeforeUnderpay = OrderProductModifier::query()->count();
+$mealBeforeUnderpay = (float) ProductUnitQuantity::query()->whereKey( $mealUnit->id )->value( 'quantity' );
+$ingBeforeUnderpay = (float) ProductUnitQuantity::query()->whereKey( $ingredientUnit->id )->value( 'quantity' );
+
+$underpayMessage = null;
 try {
     $orders->create( [
         'customer_id' => $customer->id,
@@ -259,37 +265,43 @@ try {
         'total_coupons' => 0,
         'shipping' => 0,
         'author_id' => $admin->id,
-        'addresses' => [
-            'shipping' => [ 'first_name' => 'Under', 'last_name' => 'Pay', 'country' => 'GB' ],
-            'billing' => [ 'first_name' => 'Under', 'last_name' => 'Pay', 'country' => 'GB' ],
-        ],
-        'products' => [[
-            'product_id' => $meal->id,
-            'name' => $meal->name,
-            'quantity' => 1,
-            'unit_price' => $unitPrice,
-            'total_price' => $unitPrice,
-            'unit_quantity_id' => $mealUnit->id,
-            'unit_id' => $mealUnit->unit_id,
-            'discount' => 0,
-            'discount_type' => 'percentage',
-            'discount_percentage' => 0,
-            'mode' => 'normal',
-            'zash_dine_modifiers' => [[ 'modifier_id' => $modifier->id, 'quantity' => 1 ]],
-        ]],
+        'addresses' => $addresses,
+        'products' => [ $productLine ],
         'coupons' => [],
         'payments' => [[
             'identifier' => OrderPayment::PAYMENT_CASH,
             'value' => 0.01,
         ]],
     ] );
+    fail( 'expected underpayment to be rejected when partial payments are disabled' );
+} catch ( NotAllowedException $e ) {
+    $underpayMessage = $e->getMessage();
 } catch ( Throwable $e ) {
-    $underpayRejected = str_contains( strtolower( $e->getMessage() ), 'partial' )
-        || str_contains( strtolower( $e->getMessage() ), 'unable to proceed' );
+    fail( 'unexpected underpay exception: ' . $e::class . ' ' . $e->getMessage() );
 }
 ns()->option->set( 'ns_orders_allow_partial', 'yes' );
 
+assertTrue(
+    is_string( $underpayMessage ) && str_contains( strtolower( $underpayMessage ), 'partial' ),
+    'underpay rejection message must mention partial payments, got: ' . (string) $underpayMessage
+);
+assertTrue( Order::query()->count() === $ordersBeforeUnderpay, 'underpay must not create an order' );
+assertTrue( OrderPayment::query()->count() === $paymentsBeforeUnderpay, 'underpay must not create payments' );
+assertTrue( OrderProductModifier::query()->count() === $modifiersBeforeUnderpay, 'underpay must not create modifier rows' );
+assertTrue(
+    abs( ( (float) ProductUnitQuantity::query()->whereKey( $mealUnit->id )->value( 'quantity' ) ) - $mealBeforeUnderpay ) < 0.0001,
+    'underpay must not change meal stock'
+);
+assertTrue(
+    abs( ( (float) ProductUnitQuantity::query()->whereKey( $ingredientUnit->id )->value( 'quantity' ) ) - $ingBeforeUnderpay ) < 0.0001,
+    'underpay must not change ingredient stock'
+);
+
+$mealBeforePay = (float) ProductUnitQuantity::query()->whereKey( $mealUnit->id )->value( 'quantity' );
+$ingBeforePay = (float) ProductUnitQuantity::query()->whereKey( $ingredientUnit->id )->value( 'quantity' );
 $payable = (float) $orderModel->fresh()->total;
+assertTrue( $payable > 0.01, 'held order payable must be > underpay amount' );
+
 $orders->makeOrderSinglePayment( [
     'identifier' => OrderPayment::PAYMENT_CASH,
     'value' => $payable,
@@ -297,27 +309,37 @@ $orders->makeOrderSinglePayment( [
 
 $orderModel->refresh();
 $table->refresh();
-$mealQtyAfter = (float) ProductUnitQuantity::query()->whereKey( $mealUnit->id )->value( 'quantity' );
-$ingQtyAfter = (float) ProductUnitQuantity::query()->whereKey( $ingredientUnit->id )->value( 'quantity' );
+assertTrue( $orderModel->payment_status === Order::PAYMENT_PAID, 'order must be PAID after full payment' );
+assertTrue( $table->status === DiningTable::STATUS_AVAILABLE, 'table must be available after pay' );
+
+$mealAfterPay = (float) ProductUnitQuantity::query()->whereKey( $mealUnit->id )->value( 'quantity' );
+$ingAfterPay = (float) ProductUnitQuantity::query()->whereKey( $ingredientUnit->id )->value( 'quantity' );
+assertTrue(
+    abs( ( $mealBeforePay - $mealAfterPay ) - 1.0 ) < 0.0001,
+    "pay must deduct meal stock by exactly 1 (before={$mealBeforePay}, after={$mealAfterPay})"
+);
+assertTrue(
+    abs( ( $ingBeforePay - $ingAfterPay ) - 1.0 ) < 0.0001,
+    "pay must deduct ingredient stock by exactly 1 (before={$ingBeforePay}, after={$ingAfterPay})"
+);
 
 $out = [
-    'ok' => $orderModel->payment_status === Order::PAYMENT_PAID,
+    'ok' => true,
     'order_id' => $orderId,
     'ticket_id' => $ticket->id,
-    'hold_reopen_status' => Order::PAYMENT_HOLD,
-    'kitchen_ready' => true,
-    'underpay_rejected_when_partial_disabled' => $underpayRejected,
-    'cancel_restored_stock' => $afterCancelMeal >= $beforeCancelMeal,
-    'modifier_rows' => OrderProductModifier::query()->count(),
-    'meal_qty_delta' => $mealQtyBefore - $mealQtyAfter,
-    'ingredient_qty_delta' => $ingQtyBefore - $ingQtyAfter,
+    'ticket_status' => $ticket->status,
+    'hold_then_paid' => true,
+    'kitchen_ready_persisted' => true,
+    'underpay_rejected_when_partial_disabled' => true,
+    'underpay_message' => $underpayMessage,
+    'cancel_restored_stock_after_non_hold_deduction' => true,
+    'meal_qty_delta_on_pay' => $mealBeforePay - $mealAfterPay,
+    'ingredient_qty_delta_on_pay' => $ingBeforePay - $ingAfterPay,
     'table_status_after_pay' => $table->status,
-    'stock_history_delta' => ProductHistory::query()->whereIn( 'product_id', [ $meal->id, $ingredient->id ] )->count() - $historyBefore,
+    'baseline_meal_qty' => $mealQtyBaseline,
+    'baseline_ingredient_qty' => $ingQtyBaseline,
+    'stock_history_rows' => ProductHistory::query()->whereIn( 'product_id', [ $meal->id, $ingredient->id ] )->count(),
 ];
-
-if ( ! $out['ok'] ) {
-    fail( 'order not paid: ' . json_encode( $out ) );
-}
 
 file_put_contents( storage_path( 'logs/phase5-staging-workflow-smoke.json' ), json_encode( $out, JSON_PRETTY_PRINT ) );
 echo json_encode( $out, JSON_PRETTY_PRINT ) . PHP_EOL;

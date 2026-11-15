@@ -4,15 +4,19 @@ namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\File;
+use PDO;
+use RuntimeException;
+use Throwable;
 use ZipArchive;
 
 class BackupInstanceCommand extends Command
 {
     protected $signature = 'zashpos:backup
                             {--path= : Destination directory (default storage/app/zashpos-backups)}
-                            {--label= : Optional label suffix for the archive name}';
+                            {--label= : Optional label suffix for the archive name}
+                            {--storage-app= : Override storage/app source (tests / disposable proofs)}';
 
-    protected $description = 'Create a disposable-instance backup of the database and application storage (excludes .env secrets)';
+    protected $description = 'Create a SQLite + storage/app backup archive (excludes .env; SQLite-only; fail-closed)';
 
     public function handle(): int
     {
@@ -35,82 +39,151 @@ class BackupInstanceCommand extends Command
 
         File::ensureDirectoryExists( $workDir );
 
-        $manifest = [
-            'created_at' => now()->toIso8601String(),
-            'host_git_revision' => trim( (string) @shell_exec( 'git rev-parse HEAD 2>NUL' ) ),
-            'nexopos_version' => (string) config( 'nexopos.version' ),
-            'nexopos_host' => (string) config( 'nexopos.host' ),
-            'app_url' => (string) config( 'app.url' ),
-            'db_connection' => (string) config( 'database.default' ),
-            'includes_env' => false,
-            'includes' => [],
-        ];
-
-        $dbConnection = (string) config( 'database.default' );
-        if ( $dbConnection === 'sqlite' ) {
-            $database = (string) config( 'database.connections.sqlite.database' );
-            if ( $database !== '' && ! preg_match( '/^[A-Za-z]:[\\\\\\/]/', $database ) && ! str_starts_with( $database, '/' ) ) {
-                $database = base_path( $database );
+        try {
+            $dbConnection = (string) config( 'database.default' );
+            if ( $dbConnection !== 'sqlite' ) {
+                throw new RuntimeException(
+                    "zashpos:backup supports SQLite only (got \"{$dbConnection}\"). Use host mysqldump/pg_dump for other drivers — see docs/zashpos/BACKUP-RESTORE.md."
+                );
             }
-            if ( $database !== '' && File::exists( $database ) ) {
-                $target = $workDir . DIRECTORY_SEPARATOR . 'database.sqlite';
-                File::copy( $database, $target );
-                $manifest['includes'][] = 'database.sqlite';
-                $manifest['sqlite_source'] = $database;
+
+            $database = $this->resolveSqlitePath(
+                (string) config( 'database.connections.sqlite.database' )
+            );
+            if ( $database === '' || ! File::exists( $database ) ) {
+                throw new RuntimeException( 'SQLite database file is missing; refusing to create an incomplete backup.' );
             }
-        } else {
-            $dumpPath = $workDir . DIRECTORY_SEPARATOR . 'database.sql';
-            $this->warn( 'Non-SQLite backup dumps a logical placeholder. Use your host mysqldump/pg_dump in production (see docs/zashpos/BACKUP-RESTORE.md).' );
-            File::put( $dumpPath, "-- zashpos:backup logical placeholder for {$dbConnection}\n-- Use the platform dump documented in BACKUP-RESTORE.md\n" );
-            $manifest['includes'][] = 'database.sql';
-            $manifest['sql_dump'] = 'placeholder';
-        }
 
-        $storageMirror = $workDir . DIRECTORY_SEPARATOR . 'storage-app';
-        File::ensureDirectoryExists( $storageMirror );
-        $this->mirrorStorageApp( storage_path( 'app' ), $storageMirror );
-        $manifest['includes'][] = 'storage-app';
+            $sqliteTarget = $workDir . DIRECTORY_SEPARATOR . 'database.sqlite';
+            $this->snapshotSqlite( $database, $sqliteTarget );
+            if ( ! File::exists( $sqliteTarget ) || File::size( $sqliteTarget ) < 1 ) {
+                throw new RuntimeException( 'SQLite snapshot failed (empty or missing target).' );
+            }
 
-        File::put(
-            $workDir . DIRECTORY_SEPARATOR . 'manifest.json',
-            json_encode( $manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) . PHP_EOL
-        );
+            $storageSource = $this->option( 'storage-app' )
+                ?: storage_path( 'app' );
+            $storageSource = (string) $storageSource;
+            if ( ! File::isDirectory( $storageSource ) ) {
+                throw new RuntimeException( 'storage/app source is missing: ' . $storageSource );
+            }
 
-        $zip = new ZipArchive;
-        if ( $zip->open( $zipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE ) !== true ) {
-            $this->error( 'Unable to create ZIP at ' . $zipPath );
+            $storageMirror = $workDir . DIRECTORY_SEPARATOR . 'storage-app';
+            File::ensureDirectoryExists( $storageMirror );
+            $this->mirrorStorageApp( $storageSource, $storageMirror );
+            // ZipArchive omits empty directories; Finder also skips dotfiles — use a visible sentinel.
+            File::put( $storageMirror . DIRECTORY_SEPARATOR . 'zashpos-backup-keep.txt', "ok\n" );
+
+            $manifest = [
+                'created_at' => now()->toIso8601String(),
+                'host_git_revision' => trim( (string) @shell_exec( 'git rev-parse HEAD 2>NUL' ) ),
+                'nexopos_version' => (string) config( 'nexopos.version' ),
+                'nexopos_host' => (string) config( 'nexopos.host' ),
+                'app_url' => (string) config( 'app.url' ),
+                'db_connection' => 'sqlite',
+                'includes_env' => false,
+                'sqlite_snapshot' => 'vacuum-into',
+                'includes' => [ 'database.sqlite', 'storage-app', 'manifest.json' ],
+                'sqlite_source' => $database,
+                'storage_app_source' => $storageSource,
+            ];
+
+            File::put(
+                $workDir . DIRECTORY_SEPARATOR . 'manifest.json',
+                json_encode( $manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) . PHP_EOL
+            );
+
+            $zip = new ZipArchive;
+            if ( $zip->open( $zipPath, ZipArchive::CREATE | ZipArchive::OVERWRITE ) !== true ) {
+                throw new RuntimeException( 'Unable to create ZIP at ' . $zipPath );
+            }
+
+            foreach ( File::allFiles( $workDir ) as $file ) {
+                $relative = str_replace( '\\', '/', substr( $file->getPathname(), strlen( $workDir ) + 1 ) );
+                $bytes = File::get( $file->getPathname() );
+                if ( $zip->addFromString( $relative, $bytes ) === false ) {
+                    $zip->close();
+                    throw new RuntimeException( 'Failed to archive entry: ' . $relative );
+                }
+            }
+
+            if ( $zip->locateName( 'database.sqlite' ) === false || $zip->locateName( 'manifest.json' ) === false ) {
+                $zip->close();
+                throw new RuntimeException( 'Archive missing required entries (database.sqlite / manifest.json).' );
+            }
+
+            if ( $zip->close() === false ) {
+                throw new RuntimeException( 'Failed to finalize backup ZIP.' );
+            }
+
+            File::deleteDirectory( $workDir );
+
+            $sha = hash_file( 'sha256', $zipPath );
+            if ( $sha === false ) {
+                throw new RuntimeException( 'Unable to hash backup archive.' );
+            }
+            File::put(
+                $zipPath . '.sha256',
+                $sha . '  ' . basename( $zipPath ) . PHP_EOL
+            );
+
+            $this->info( 'Backup created (SQLite VACUUM INTO snapshot; no .env secrets).' );
+            $this->line( 'Path: ' . $zipPath );
+            $this->line( 'SHA-256: ' . $sha );
+
+            return self::SUCCESS;
+        } catch ( Throwable $e ) {
+            if ( File::isDirectory( $workDir ) ) {
+                File::deleteDirectory( $workDir );
+            }
+            if ( File::exists( $zipPath ) ) {
+                File::delete( $zipPath );
+            }
+            if ( File::exists( $zipPath . '.sha256' ) ) {
+                File::delete( $zipPath . '.sha256' );
+            }
+            $this->error( $e->getMessage() );
 
             return self::FAILURE;
         }
+    }
 
-        foreach ( File::allFiles( $workDir ) as $file ) {
-            $relative = str_replace( '\\', '/', substr( $file->getPathname(), strlen( $workDir ) + 1 ) );
-            // Prefer addFromString so Windows file locks on live SQLite still archive.
-            $zip->addFromString( $relative, File::get( $file->getPathname() ) );
+    private function resolveSqlitePath( string $database ): string
+    {
+        if ( $database === '' ) {
+            return '';
         }
-        $zip->close();
 
-        File::deleteDirectory( $workDir );
+        if ( ! preg_match( '/^[A-Za-z]:[\\\\\\/]/', $database ) && ! str_starts_with( $database, '/' ) ) {
+            return base_path( $database );
+        }
 
-        $sha = hash_file( 'sha256', $zipPath );
-        File::put(
-            $zipPath . '.sha256',
-            $sha . '  ' . basename( $zipPath ) . PHP_EOL
-        );
+        return $database;
+    }
 
-        $this->info( 'Backup created (no .env secrets included).' );
-        $this->line( 'Path: ' . $zipPath );
-        $this->line( 'SHA-256: ' . $sha );
+    /**
+     * Consistent on-disk snapshot that includes committed WAL data.
+     */
+    private function snapshotSqlite( string $source, string $destination ): void
+    {
+        if ( File::exists( $destination ) ) {
+            File::delete( $destination );
+        }
 
-        return self::SUCCESS;
+        $pdo = new PDO( 'sqlite:' . $source, null, null, [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        ] );
+        $pdo->exec( 'PRAGMA busy_timeout=10000' );
+        $pdo->exec( 'PRAGMA wal_checkpoint(FULL)' );
+        $pdo->exec( 'VACUUM INTO ' . $pdo->quote( $destination ) );
+        $pdo = null;
+
+        if ( ! File::exists( $destination ) ) {
+            throw new RuntimeException( 'VACUUM INTO did not create ' . $destination );
+        }
     }
 
     private function mirrorStorageApp( string $source, string $destination ): void
     {
-        if ( ! File::isDirectory( $source ) ) {
-            return;
-        }
-
         $skip = [
             'zashpos-backups',
             'zashdine-bak-validate',
@@ -124,19 +197,13 @@ class BackupInstanceCommand extends Command
             }
 
             $target = $destination . DIRECTORY_SEPARATOR . $basename;
-            try {
-                File::ensureDirectoryExists( $target );
-                File::copyDirectory( $directory, $target );
-            } catch ( \Throwable $e ) {
-                $this->warn( 'Skipped storage mirror for ' . $basename . ': ' . $e->getMessage() );
-            }
+            File::ensureDirectoryExists( $target );
+            File::copyDirectory( $directory, $target );
         }
 
         foreach ( File::files( $source ) as $file ) {
-            try {
-                File::copy( $file->getPathname(), $destination . DIRECTORY_SEPARATOR . $file->getFilename() );
-            } catch ( \Throwable $e ) {
-                $this->warn( 'Skipped storage file ' . $file->getFilename() . ': ' . $e->getMessage() );
+            if ( ! File::copy( $file->getPathname(), $destination . DIRECTORY_SEPARATOR . $file->getFilename() ) ) {
+                throw new RuntimeException( 'Failed to copy storage file: ' . $file->getFilename() );
             }
         }
     }
