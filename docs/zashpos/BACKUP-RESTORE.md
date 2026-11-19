@@ -71,6 +71,8 @@ Safety regressions (no MySQL required; must fail before dump/DROP/`rm -rf`):
 # Windows: .\scripts\proof-mysql-backup-restore.ps1 -Regressions
 ```
 
+Storage markers are **always** uniquely generated under `SOURCE_STORAGE_APP` as `zashpos-mysql-proof-<stamp>-<rand>/probe.txt` with exclusive create. `PROOF_MARKER_REL` overrides are ignored (no traversal/overwrite of foreign files). Cleanup removes only fixtures owned by this run; evidence reports cleanup only after verification.
+
 Evidence: `storage/logs/phase5-mysql-backup-restore-proof.json`. Distinguishes intentional source **fixture create/cleanup** from **unchanged-during-restore** checks. Asserts restored synthetic proof row **and** representative application table names/counts; storage is restored only from a separate tar + SHA-256 manifest. **Real staging MySQL restore remains pending** until host access + credentials exist.
 
 ### Secret / APP_KEY recovery (document only — no secrets in Git)

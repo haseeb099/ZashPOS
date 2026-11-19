@@ -15,6 +15,11 @@
 #   TARGET_STORAGE_APP      — must be under storage/framework/testing/ and must not exist
 #   PROOF_MYSQL_DRY_RUN=1   — validate inputs only; no dump/restore/mutations
 #
+# Storage markers are always uniquely generated under SOURCE_STORAGE_APP
+# (zashpos-mysql-proof-<stamp>-<rand>/probe.txt) with exclusive create.
+# PROOF_MARKER_REL overrides are ignored so traversal/collision cannot overwrite
+# or delete a file this run did not create.
+#
 # Writes evidence JSON to storage/logs/phase5-mysql-backup-restore-proof.json (gitignored).
 # Real staging MySQL restore remains pending until a host with credentials runs this.
 set -euo pipefail
@@ -51,7 +56,11 @@ fi
 SAFE_STORAGE_ROOT="$ROOT/storage/framework/testing"
 SOURCE_STORAGE_APP="${SOURCE_STORAGE_APP:-$ROOT/storage/app}"
 TARGET_STORAGE_APP="${TARGET_STORAGE_APP:-$SAFE_STORAGE_ROOT/mysql-restore-${STAMP}-${RAND}}"
-PROOF_MARKER_REL="${PROOF_MARKER_REL:-zashpos-mysql-proof/probe.txt}"
+# Marker path is always generated under SOURCE_STORAGE_APP — PROOF_MARKER_REL overrides are ignored.
+if [[ -n "${PROOF_MARKER_REL:-}" ]]; then
+  echo "Ignoring PROOF_MARKER_REL override (markers are always uniquely generated under SOURCE_STORAGE_APP)." >&2
+fi
+unset PROOF_MARKER_REL || true
 EVIDENCE="$ROOT/storage/logs/phase5-mysql-backup-restore-proof.json"
 ARTIFACT_DIR="$SAFE_STORAGE_ROOT/mysql-proof-artifacts/${STAMP}-${RAND}"
 DUMP_FILE="$ARTIFACT_DIR/source-${STAMP}.sql"
@@ -67,6 +76,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   echo "source_db=$MYSQL_SOURCE_DATABASE target_db=$MYSQL_TARGET_DATABASE"
   echo "source_storage=$SOURCE_STORAGE_APP"
   echo "target_storage=$TARGET_STORAGE_APP"
+  echo "marker_policy=unique-private-dir-exclusive-create"
   exit 0
 fi
 
@@ -86,8 +96,12 @@ DUMP=(mysqldump -h "$MYSQL_HOST" -P "$MYSQL_PORT" -u "$MYSQL_USER" --single-tran
 
 OWNED_PROOF_KEY=""
 OWNED_MARKER_PATH=""
+OWNED_MARKER_DIR=""
+OWNED_MARKER_REL=""
 OWNED_TARGET_DB=""
 CLEANED=0
+MARKER_CLEANUP_VERIFIED=false
+DB_FIXTURE_CLEANUP_VERIFIED=false
 
 cleanup_owned_fixtures() {
   if [[ "$CLEANED" -eq 1 ]]; then
@@ -98,15 +112,25 @@ cleanup_owned_fixtures() {
     if [[ -n "$OWNED_PROOF_KEY" ]]; then
       "${MYSQL[@]}" "$MYSQL_SOURCE_DATABASE" -e \
         "DELETE FROM zashpos_backup_proof WHERE proof_key='${OWNED_PROOF_KEY}';" 2>/dev/null || true
+      local remaining
+      remaining="$("${MYSQL[@]}" "$MYSQL_SOURCE_DATABASE" -e \
+        "SELECT COUNT(*) FROM zashpos_backup_proof WHERE proof_key='${OWNED_PROOF_KEY}';" 2>/dev/null || echo 1)"
+      if [[ "$remaining" == "0" ]]; then
+        DB_FIXTURE_CLEANUP_VERIFIED=true
+      fi
+      OWNED_PROOF_KEY=""
     fi
     if [[ -n "$OWNED_TARGET_DB" ]]; then
       "${MYSQL[@]}" -e "DROP DATABASE IF EXISTS \`${OWNED_TARGET_DB}\`;" 2>/dev/null || true
       OWNED_TARGET_DB=""
     fi
   fi
-  if [[ -n "$OWNED_MARKER_PATH" && -f "$OWNED_MARKER_PATH" ]]; then
-    rm -f "$OWNED_MARKER_PATH" 2>/dev/null || true
-    rmdir "$(dirname "$OWNED_MARKER_PATH")" 2>/dev/null || true
+  if [[ -n "$OWNED_MARKER_PATH" || -n "$OWNED_MARKER_DIR" ]]; then
+    if remove_owned_storage_marker "$OWNED_MARKER_PATH" "$OWNED_MARKER_DIR"; then
+      MARKER_CLEANUP_VERIFIED=true
+    fi
+    OWNED_MARKER_PATH=""
+    OWNED_MARKER_DIR=""
   fi
   unset MYSQL_PWD || true
 }
@@ -129,11 +153,11 @@ fi
 
 mkdir -p "$ARTIFACT_DIR" "$(dirname "$EVIDENCE")"
 
-MARKER_PATH="$SOURCE_STORAGE_APP/$PROOF_MARKER_REL"
-PROBE_VALUE="mysql-restore-proof-${STAMP}"
-mkdir -p "$(dirname "$MARKER_PATH")"
-printf '%s' "$PROBE_VALUE" > "$MARKER_PATH"
-OWNED_MARKER_PATH="$MARKER_PATH"
+PROBE_VALUE="mysql-restore-proof-${STAMP}-${RAND}"
+echo "Creating exclusive owned storage marker under SOURCE_STORAGE_APP…"
+create_owned_storage_marker "$SOURCE_STORAGE_APP" "$STAMP" "$RAND" "$PROBE_VALUE"
+MARKER_PATH="$OWNED_MARKER_PATH"
+PROOF_MARKER_REL="$OWNED_MARKER_REL"
 
 echo "Inserting disposable DB proof fixture in source…"
 PROOF_KEY="zashpos_mysql_proof_${STAMP}_${RAND}"
@@ -305,6 +329,17 @@ fi
 "${MYSQL[@]}" -e "DROP DATABASE IF EXISTS \`${OWNED_TARGET_DB}\`;"
 OWNED_TARGET_DB=""
 
+# Clean owned fixtures before evidence so cleanup claims are verified.
+cleanup_owned_fixtures
+if [[ "$MARKER_CLEANUP_VERIFIED" != "true" ]]; then
+  echo "Owned storage marker cleanup was not verified." >&2
+  exit 1
+fi
+if [[ "$DB_FIXTURE_CLEANUP_VERIFIED" != "true" ]]; then
+  echo "Owned DB proof fixture cleanup was not verified." >&2
+  exit 1
+fi
+
 cat > "$EVIDENCE" <<EOF
 {
   "proved_at": "$(date -Iseconds)",
@@ -322,9 +357,11 @@ cat > "$EVIDENCE" <<EOF
   "fixture": {
     "proof_key": "${PROOF_KEY}",
     "marker_rel": "${PROOF_MARKER_REL}",
+    "marker_policy": "unique-private-dir-exclusive-create",
     "created_in_source_before_dump": true,
-    "cleaned_after_proof": true,
-    "note": "Fixture create/cleanup are intentional and distinct from restore side-effects."
+    "marker_cleanup_verified": true,
+    "db_fixture_cleanup_verified": true,
+    "note": "Fixture create/cleanup are intentional and distinct from restore side-effects. Cleanup reported only after verification."
   },
   "source_during_restore": {
     "proof_unchanged": true,
@@ -347,4 +384,3 @@ cat > "$EVIDENCE" <<EOF
 EOF
 
 echo "MySQL backup/restore proof OK → $EVIDENCE"
-# EXIT trap removes source fixtures and unsets MYSQL_PWD.
