@@ -1,36 +1,24 @@
-import { execFileSync } from 'node:child_process';
-import path from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { apiResult, apiSend, createAreaAndTable, deleteAreaAndTable, listProducts } from '../helpers/api';
 import { authState } from '../helpers/auth';
-import { baseURL, e2ePath } from '../load-env';
+import { baseURL } from '../load-env';
 
-/**
- * Production-like staging uses APP_ENV=production, so api ThrottleMiddelware:80,1
- * is active. Clear the file cache between cases so the second test is not rejected
- * for prior-case product/CRUD chatter. Deployed limits stay enabled.
- */
-function clearApplicationRateLimitCache(): void {
-    const root = path.resolve(e2ePath('..'));
-    execFileSync('php', ['artisan', 'cache:clear', '--no-interaction'], {
-        cwd: root,
-        env: {
-            ...process.env,
-            ZASHPOS_PREFER_LOCAL_APP: '1',
-            APP_BASE_PATH: root,
-        },
-        stdio: 'pipe',
-    });
-}
-
-async function firstCatalogProduct(page: Page): Promise<{
+type CatalogProductDetails = {
     id: number;
     name: string;
     category_id: number;
     unit_quantity_id: number;
     unit_id: number;
     sale_price: number;
-}> {
+};
+
+/**
+ * Stop after the first usable catalog product so both Reverb cases stay within
+ * production `api` `ThrottleMiddelware:80,1` (per authenticated user) without a
+ * blanket `cache:clear`. Shared across the serial describe so the second case
+ * does not repeat product/quantity lookups.
+ */
+async function firstCatalogProduct(page: Page): Promise<CatalogProductDetails> {
     const products = await listProducts(page);
     for (const row of products.slice(0, 20)) {
         const detailed = await productDetails(page, row.id);
@@ -263,9 +251,10 @@ async function authChannel(page: Page, channelName: string): Promise<number> {
 }
 
 test.describe('ZashDine Reverb realtime', () => {
-    test.beforeEach(() => {
-        clearApplicationRateLimitCache();
-    });
+    test.describe.configure({ mode: 'serial' });
+
+    // Shared across serial cases so product/quantity lookups run once (rate-limit budget).
+    let sharedProduct: CatalogProductDetails | null = null;
 
     test('chef/waiter receive board and ready alerts over WebSockets without relying on the 5s poll', async ({ browser }) => {
         test.setTimeout(420000);
@@ -299,7 +288,8 @@ test.describe('ZashDine Reverb realtime', () => {
         };
 
         try {
-            const product = await firstCatalogProduct(adminPage);
+            sharedProduct = await firstCatalogProduct(adminPage);
+            const product = sharedProduct;
 
             await wipeKitchens(adminPage);
             kitchenId = await createKitchen(adminPage, `Reverb Grill ${Date.now().toString(36)}`, [product.category_id]);
@@ -444,6 +434,7 @@ test.describe('ZashDine Reverb realtime', () => {
     // Reverb outage + NotificationCreatedEvent coverage lives in ZashDineRealtimeTest.
     test('kitchen status still succeeds and boards keep polling when Reverb is unavailable', async ({ browser }) => {
         test.setTimeout(300000);
+        test.skip(process.env.E2E_REVERB !== '1', 'Set E2E_REVERB=1 with a live Reverb server for this browser proof.');
 
         const admin = await browser.newContext({ storageState: authState('admin'), baseURL: baseURL() });
         const chef = await browser.newContext({ storageState: authState('chef'), baseURL: baseURL() });
@@ -454,7 +445,8 @@ test.describe('ZashDine Reverb realtime', () => {
         let orderId: number | null = null;
 
         try {
-            const product = await firstCatalogProduct(adminPage);
+            const product = sharedProduct ?? await firstCatalogProduct(adminPage);
+            sharedProduct = product;
 
             await wipeKitchens(adminPage);
             kitchenId = await createKitchen(adminPage, `Poll Grill ${Date.now().toString(36)}`, [product.category_id]);
