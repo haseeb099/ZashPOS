@@ -2,7 +2,7 @@
 
 ## Release a ZashDine module build
 
-1. Checkout the intended host revision (Phase 5 packaging baseline: `afca66362…` or later).
+1. Checkout the intended host revision (Phase 5 baseline: `a08b5c589…` or later).
 2. `php artisan zash-dine:package --no-interaction`
 3. Record **SHA-256**, file size, `nexopos.version`, capabilities, and git SHA in the deployment manifest / release notes.
 4. Store the ZIP outside Git (object storage or signed download). Do not commit `storage/app/zashdine-packages`.

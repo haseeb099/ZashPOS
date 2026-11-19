@@ -131,15 +131,16 @@ Configure receipt columns under invoice settings (`ns_invoice_receipt_column_a` 
 
 | Check | Status in Phase 5 |
 | --- | --- |
-| Thermal receipt printer via OS/`window.print` on receipt `?autoprint=true` | **Needs hardware** — browser print dialog only |
-| Kitchen ticket on a physical kitchen printer or KDS tablet | **Needs hardware** — kitchen UI is on-screen; no dedicated ESC/POS driver in ZashDine yet |
-| Tablet touch + print from Floor/Kitchen at venue DPI | **Needs hardware** — viewport E2E covers layout only |
+| Thermal receipt printer via OS/`window.print` on receipt `?autoprint=true` | **Hardware pending** — browser print dialog exists; physical printer not tested |
+| Dedicated kitchen ESC/POS / kitchen printer driver | **Missing functionality** — kitchen UI is on-screen only; not merely an unperformed hardware test |
+| Kitchen ticket on a KDS tablet (display) | **Hardware pending** — viewport E2E covers layout only |
+| Tablet touch + print from Floor/Kitchen at venue DPI | **Hardware pending** — physical tablet not tested |
 
 ## Deployment readiness
 
-See [DEPLOYMENT.md](DEPLOYMENT.md), [BACKUP-RESTORE.md](BACKUP-RESTORE.md), and [RELEASE-ROLLBACK.md](RELEASE-ROLLBACK.md). Local staging proves ZIP Modules upload, workflow smoke, and backup restore; remote host/TLS still required for a shared staging URL. Hardware print/tablet gates remain as in the table above.
+See [DEPLOYMENT.md](DEPLOYMENT.md), [REMOTE-STAGING.md](REMOTE-STAGING.md), [BACKUP-RESTORE.md](BACKUP-RESTORE.md), and [RELEASE-ROLLBACK.md](RELEASE-ROLLBACK.md). Local staging proves ZIP Modules upload, workflow smoke, and SQLite backup restore; remote host/TLS and MySQL dump drills remain blocked on access. Hardware print/tablet gates remain as in the table above. Client subscription billing is specified only in [CLIENT-SUBSCRIPTION-BILLING.md](CLIENT-SUBSCRIPTION-BILLING.md) (D-021).
 
 ## Status
-Phases 0–4 and Phase 5 packaging (`afca66362`) are on master. Deployment-readiness continues on `phase-5-deployment-readiness` — Phase 5 completion boxes stay unticked until verified.
+Phases 0–4, packaging (PR #32), and deployment-readiness (PR #33 → master `a08b5c589`) are merged. Remote staging continues on `phase-5-remote-staging` — Phase 5 completion boxes stay unticked while remote TLS, MySQL restore on staging, hardware, and ESC/POS gaps remain.
 
 POS dine-in opens `#zash-dine-table-picker` when the cart has no table yet; reopened/held dine-in orders keep `zash_dine_table_id` and skip the picker. Confirm re-checks `/api/zash-dine/tables/available` before resolve; a race clears the selection, keeps a visible notice while the list refreshes, and requires choosing an available table again. Floor note/cancel use `#zash-dine-note-popup` / `#zash-dine-cancel-meal-popup` and close only after a successful API response (errors stay in the popup). Popup shells are capped to the viewport (`min(36rem, 100vw-2rem)` / `min(80vh, 100vh-2rem)`) so tablet footers stay reachable.

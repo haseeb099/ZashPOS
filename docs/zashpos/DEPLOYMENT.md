@@ -13,13 +13,13 @@ This document prepares a **staging** installation. It does **not** purchase host
 | Health | `GET /up` registered in `routes/web.php` |
 | Packaging | `php artisan zash-dine:package` + [PACKAGING.md](PACKAGING.md) |
 
-**Access still needed for a remote staging host:** SSH (or panel) to a VPS/PaaS, a DNS name with TLS certificates, outbound SMTP (optional), and firewall rules for HTTPS + Reverb (or a reverse-proxy WebSocket path). Until that exists, complete local staging only.
+**Access still needed for a remote staging host:** see [REMOTE-STAGING.md](REMOTE-STAGING.md) for the exact checklist (SSH, DNS/TLS, firewall, dedicated MySQL schema, Supervisor/cron). Send credentials via a **secure channel** — never commit them. Until that exists, complete local staging only. **Do not purchase hosting or deploy a live client from this phase.**
 
 ## Required host revision
 
 | Item | Value |
 | --- | --- |
-| Git revision (master at Phase 5 packaging merge) | `afca66362f6d6e22a8c2cd85849d9ccec4b94e1c` |
+| Git revision (master after PR #33 merge) | `a08b5c5895201bd6fec26b76c6c5f15e4c5f735d` |
 | Core | `nexopos.version` **6.3.0** |
 | Host identity | `haseeb099/ZashPOS` |
 | Capabilities | `order-product-canonical-unit-price`, `pos-cart-products-mergeable` |
@@ -69,12 +69,14 @@ See [ZASHDINE.md](ZASHDINE.md) § Receipts. Distinguish:
 
 | Gap | Kind |
 | --- | --- |
-| No dedicated ESC/POS kitchen driver in ZashDine | **Missing functionality** |
-| Thermal receipt via OS/`window.print` on receipt URL | **Hardware pending** (browser dialog exists) |
-| Physical tablet at venue DPI | **Hardware pending** (viewport E2E covers layout) |
+| No dedicated ESC/POS kitchen driver in ZashDine | **Missing functionality** (not an unperformed hardware test) |
+| Thermal receipt via OS/`window.print` on receipt URL | **Hardware pending** until a physical printer is tested |
+| Physical tablet at venue DPI | **Hardware pending** until a physical tablet is tested |
 
 ## Related docs
 
+- [REMOTE-STAGING.md](REMOTE-STAGING.md) — remote host access + nginx/Supervisor templates
 - [PACKAGING.md](PACKAGING.md) — ZIP build / clean Modules upload
-- [BACKUP-RESTORE.md](BACKUP-RESTORE.md) — backup archives + restore proof
+- [BACKUP-RESTORE.md](BACKUP-RESTORE.md) — SQLite commands + MySQL dump/restore proof
 - [RELEASE-ROLLBACK.md](RELEASE-ROLLBACK.md) — update and rollback
+- [CLIENT-SUBSCRIPTION-BILLING.md](CLIENT-SUBSCRIPTION-BILLING.md) — next-work spec (not implemented)
