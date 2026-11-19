@@ -3,6 +3,33 @@ import { apiResult, apiSend, createAreaAndTable, deleteAreaAndTable, listProduct
 import { authState } from '../helpers/auth';
 import { baseURL } from '../load-env';
 
+type CatalogProductDetails = {
+    id: number;
+    name: string;
+    category_id: number;
+    unit_quantity_id: number;
+    unit_id: number;
+    sale_price: number;
+};
+
+/**
+ * Stop after the first usable catalog product so both Reverb cases stay within
+ * production `api` `ThrottleMiddelware:80,1` (per authenticated user) without a
+ * blanket `cache:clear`. Shared across the serial describe so the second case
+ * does not repeat product/quantity lookups.
+ */
+async function firstCatalogProduct(page: Page): Promise<CatalogProductDetails> {
+    const products = await listProducts(page);
+    for (const row of products.slice(0, 20)) {
+        const detailed = await productDetails(page, row.id);
+        if (detailed.category_id > 0 && detailed.unit_quantity_id > 0) {
+            return detailed;
+        }
+    }
+
+    throw new Error('need a product with a category');
+}
+
 async function productDetails(page: Page, productId: number): Promise<{
     id: number;
     name: string;
@@ -224,6 +251,11 @@ async function authChannel(page: Page, channelName: string): Promise<number> {
 }
 
 test.describe('ZashDine Reverb realtime', () => {
+    test.describe.configure({ mode: 'serial' });
+
+    // Shared across serial cases so product/quantity lookups run once (rate-limit budget).
+    let sharedProduct: CatalogProductDetails | null = null;
+
     test('chef/waiter receive board and ready alerts over WebSockets without relying on the 5s poll', async ({ browser }) => {
         test.setTimeout(420000);
         test.skip(process.env.E2E_REVERB !== '1', 'Set E2E_REVERB=1 with a live Reverb server for this browser proof.');
@@ -239,7 +271,6 @@ test.describe('ZashDine Reverb realtime', () => {
         await installWsProbe(waiterPage, '__zashWaiterProbe');
 
         const created = await createAreaAndTable(adminPage, 'E2E reverb');
-        const products = await listProducts(adminPage);
         let kitchenId = 0;
         let orderId: number | null = null;
 
@@ -257,19 +288,15 @@ test.describe('ZashDine Reverb realtime', () => {
         };
 
         try {
-            const detailed = [];
-            for (const product of products.slice(0, 20)) {
-                detailed.push(await productDetails(adminPage, product.id));
-            }
-            const product = detailed.find((row) => row.category_id > 0 && row.unit_quantity_id > 0);
-            expect(product, 'need a product with a category').toBeTruthy();
+            sharedProduct = await firstCatalogProduct(adminPage);
+            const product = sharedProduct;
 
             await wipeKitchens(adminPage);
-            kitchenId = await createKitchen(adminPage, `Reverb Grill ${Date.now().toString(36)}`, [product!.category_id]);
+            kitchenId = await createKitchen(adminPage, `Reverb Grill ${Date.now().toString(36)}`, [product.category_id]);
             expect(kitchenId).toBeGreaterThan(0);
 
             const customerId = await defaultCustomerId(waiterPage);
-            orderId = await createUnpaidDineInOrder(waiterPage, created.tableId, customerId, [product!]);
+            orderId = await createUnpaidDineInOrder(waiterPage, created.tableId, customerId, [product]);
 
             await disableFiveSecondPolling(chefPage);
             await disableFiveSecondPolling(waiterPage);
@@ -407,28 +434,24 @@ test.describe('ZashDine Reverb realtime', () => {
     // Reverb outage + NotificationCreatedEvent coverage lives in ZashDineRealtimeTest.
     test('kitchen status still succeeds and boards keep polling when Reverb is unavailable', async ({ browser }) => {
         test.setTimeout(300000);
+        test.skip(process.env.E2E_REVERB !== '1', 'Set E2E_REVERB=1 with a live Reverb server for this browser proof.');
 
         const admin = await browser.newContext({ storageState: authState('admin'), baseURL: baseURL() });
         const chef = await browser.newContext({ storageState: authState('chef'), baseURL: baseURL() });
         const adminPage = await admin.newPage();
         const chefPage = await chef.newPage();
         const created = await createAreaAndTable(adminPage, 'E2E pollfallback');
-        const products = await listProducts(adminPage);
         let kitchenId = 0;
         let orderId: number | null = null;
 
         try {
-            const detailed = [];
-            for (const product of products.slice(0, 20)) {
-                detailed.push(await productDetails(adminPage, product.id));
-            }
-            const product = detailed.find((row) => row.category_id > 0 && row.unit_quantity_id > 0);
-            expect(product, 'need a product with a category').toBeTruthy();
+            const product = sharedProduct ?? await firstCatalogProduct(adminPage);
+            sharedProduct = product;
 
             await wipeKitchens(adminPage);
-            kitchenId = await createKitchen(adminPage, `Poll Grill ${Date.now().toString(36)}`, [product!.category_id]);
+            kitchenId = await createKitchen(adminPage, `Poll Grill ${Date.now().toString(36)}`, [product.category_id]);
             const customerId = await defaultCustomerId(adminPage);
-            orderId = await createUnpaidDineInOrder(adminPage, created.tableId, customerId, [product!]);
+            orderId = await createUnpaidDineInOrder(adminPage, created.tableId, customerId, [product]);
 
             // Force Echo/Reverb failure in this tab without affecting other suites' servers.
             await chefPage.addInitScript(() => {

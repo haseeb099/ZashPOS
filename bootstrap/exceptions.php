@@ -9,6 +9,7 @@ use App\Services\Helper;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Http\Request;
+use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 /**
@@ -52,6 +53,16 @@ $exceptions->render( function ( NotFoundHttpException $exception, Request $reque
 } );
 
 $exceptions->render( function ( Exception $exception, Request $request ) {
+    /**
+     * Preserve intentional HTTP statuses (403 AccessDenied, 429 throttle, …).
+     * The previous catch-all forced 500 for every Exception when APP_DEBUG=false,
+     * which broke private-channel denial and API rate-limit responses under
+     * production-like staging (APP_ENV=production, APP_DEBUG=false).
+     */
+    if ( $exception instanceof HttpExceptionInterface ) {
+        return null;
+    }
+
     $title = __( 'An Error Occurred' );
     $back = Helper::getValidPreviousUrl( $request );
     $message = $exception->getMessage() ?: sprintf( __( 'Class: %s' ), get_class( $exception ) );
