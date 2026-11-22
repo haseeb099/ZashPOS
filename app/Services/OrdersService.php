@@ -98,6 +98,15 @@ class OrdersService
         $isNew = ! $order instanceof Order;
 
         /**
+         * Checkout/update on an existing order: lock and reload before payment
+         * status, balance, or terminal-attempt checks (same order → attempt
+         * sequence as ordinary add-payment / terminal settlement).
+         */
+        if ( $order instanceof Order && $order->id ) {
+            $order = Order::query()->whereKey( $order->id )->lockForUpdate()->firstOrFail();
+        }
+
+        /**
          * if the order is being edited, we need to
          * keep a reference to the previous order to be able to compare
          * the changes that has been made.
@@ -865,10 +874,30 @@ class OrdersService
          * order and only update them.
          */
         return collect( $payments )->map( function ( $payment ) use ( $order ) {
+            $this->assertPublicPaymentIdentifierAllowed( (string) ( $payment['identifier'] ?? '' ) );
             Hook::action( 'ns-before-order-payment', $payment, $order );
 
             return $this->__saveOrderSinglePayment( $payment, $order );
         } );
+    }
+
+    private function assertPublicPaymentIdentifierAllowed( string $identifier ): void
+    {
+        if ( $identifier === OrderPayment::PAYMENT_CARD_INTEGRATED && ! self::$allowIntegratedTerminalSettlement ) {
+            throw new NotAllowedException( __( 'Integrated PDQ payments can only be recorded by the terminal settlement service.' ) );
+        }
+    }
+
+    /**
+     * When true, persistOrderSinglePayment may record card-integrated-pdq.
+     * Static so container-resolved siblings (e.g. Hook guards) see the same flag.
+     * Set only by makeTrustedTerminalSettlementPayment (in-process); never from HTTP input.
+     */
+    private static bool $allowIntegratedTerminalSettlement = false;
+
+    public function isAllowingIntegratedTerminalSettlement(): bool
+    {
+        return self::$allowIntegratedTerminalSettlement;
     }
 
     /**
@@ -883,14 +912,38 @@ class OrdersService
     public function makeOrderSinglePayment( $payment, Order $order )
     {
         return DB::transaction(
-            fn() => $this->persistOrderSinglePayment( $payment, $order ),
+            function () use ( $payment, $order ) {
+                $order = Order::query()->whereKey( $order->id )->lockForUpdate()->firstOrFail();
+
+                return $this->persistOrderSinglePayment( $payment, $order );
+            },
             attempts: 3
         );
     }
 
+    /**
+     * In-process settlement for an approved, already-locked terminal attempt.
+     * Must run inside the caller's transaction that already locked order → attempt.
+     *
+     * @param  array $payment
+     * @return array
+     */
+    public function makeTrustedTerminalSettlementPayment( $payment, Order $order )
+    {
+        self::$allowIntegratedTerminalSettlement = true;
+
+        try {
+            return $this->persistOrderSinglePayment( $payment, $order );
+        } finally {
+            self::$allowIntegratedTerminalSettlement = false;
+        }
+    }
+
     private function persistOrderSinglePayment( $payment, Order $order )
     {
-        // Check if the order is already paid
+        $this->assertPublicPaymentIdentifierAllowed( (string) ( $payment['identifier'] ?? '' ) );
+
+        // Check if the order is already paid (after lock + reload for ordinary add-payment).
         if ( $order->payment_status === Order::PAYMENT_PAID ) {
             throw new NotAllowedException( __( 'Unable to proceed as the order is already paid.' ) );
         }
@@ -1047,6 +1100,10 @@ class OrdersService
 
         if ( ! empty( $fields[ 'payments' ] ) ) {
             foreach ( $fields[ 'payments' ] as $payment ) {
+                if ( ( $payment['identifier'] ?? null ) === OrderPayment::PAYMENT_CARD_INTEGRATED ) {
+                    throw new NotAllowedException( __( 'Integrated PDQ payments can only be recorded by the terminal settlement service.' ) );
+                }
+
                 if ( in_array( $payment['identifier'], $allowedPaymentsGateways ) ) {
                     /**
                      * check if the customer account balance is enough for the account-payment

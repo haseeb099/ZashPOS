@@ -4,7 +4,7 @@ namespace Modules\ZashPay\Services;
 
 use App\Exceptions\NotAllowedException;
 use App\Models\Order;
-use App\Models\OrderPayment;
+use App\Services\OrdersService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Modules\ZashPay\Models\TerminalAttempt;
@@ -17,9 +17,13 @@ class UnresolvedTerminalAttemptGuard
             return;
         }
 
-        $identifier = is_array( $payment )
-            ? (string) ( $payment['identifier'] ?? '' )
-            : (string) ( $payment ?? '' );
+        /**
+         * Trusted in-process settlement already holds order → attempt locks and
+         * is the only path allowed to post card-integrated-pdq.
+         */
+        if ( app( OrdersService::class )->isAllowingIntegratedTerminalSettlement() ) {
+            return;
+        }
 
         $query = TerminalAttempt::query()
             ->where( 'order_id', $order->id )
@@ -33,20 +37,8 @@ class UnresolvedTerminalAttemptGuard
             $query->lockForUpdate();
         }
 
-        $unresolved = $query->exists();
-
-        if ( ! $unresolved ) {
-            return;
+        if ( $query->exists() ) {
+            throw new NotAllowedException( __( 'An integrated PDQ attempt is still pending reconciliation for this order.' ) );
         }
-
-        /**
-         * Settling the approved integrated attempt is allowed; cash/standalone
-         * and other alternate settlement paths must wait for reconcile.
-         */
-        if ( $identifier === OrderPayment::PAYMENT_CARD_INTEGRATED ) {
-            return;
-        }
-
-        throw new NotAllowedException( __( 'An integrated PDQ attempt is still pending reconciliation for this order.' ) );
     }
 }

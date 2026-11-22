@@ -387,6 +387,10 @@ class TerminalPaymentService
         $factor = 10 ** $precision;
         $value = $attempt->amount_minor / $factor;
 
+        if ( (int) $attempt->order_id !== (int) $order->id ) {
+            throw new NotAllowedException( __( 'Terminal attempt does not belong to this order.' ) );
+        }
+
         $paymentPayload = [
             'identifier' => OrderPayment::PAYMENT_CARD_INTEGRATED,
             'value' => $value,
@@ -394,7 +398,8 @@ class TerminalPaymentService
             'reference' => $attempt->provider_ref,
         ];
 
-        $response = $this->ordersService->makeOrderSinglePayment( $paymentPayload, $order );
+        // Caller already locked order → attempt; keep settlement in this transaction.
+        $response = $this->ordersService->makeTrustedTerminalSettlementPayment( $paymentPayload, $order );
         $orderPayment = $response['data']['orderPayment'] ?? null;
 
         if ( ! $orderPayment instanceof OrderPayment ) {
@@ -409,8 +414,18 @@ class TerminalPaymentService
             ];
         }
 
-        $attempt->order_payment_id = $orderPayment->id;
-        $attempt->save();
+        $linked = TerminalAttempt::query()
+            ->whereKey( $attempt->id )
+            ->where( 'order_id', $order->id )
+            ->where( 'status', TerminalAttempt::STATUS_APPROVED )
+            ->whereNull( 'order_payment_id' )
+            ->update( [
+                'order_payment_id' => $orderPayment->id,
+            ] );
+
+        if ( $linked !== 1 ) {
+            throw new NotAllowedException( __( 'Unable to link the terminal attempt to the order payment atomically.' ) );
+        }
 
         return [
             'attempt' => $attempt->fresh(),

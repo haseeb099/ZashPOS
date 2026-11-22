@@ -32,6 +32,6 @@ Decide and gather:
 ## Identifiers
 
 - `card-standalone-pdq` — base plan; active by default after setup/migration
-- `card-integrated-pdq` — ZashPay add-on; inactive until `zash_pay_integrated_enabled=yes`
+- `card-integrated-pdq` — ZashPay add-on; inactive until `zash_pay_integrated_enabled=yes`. Never accepted on public order create/update or add-payment payloads (even when the add-on is off). Settlement is internal only: approved locked attempt for the same order → `makeTrustedTerminalSettlementPayment` → atomic `order_payment_id` link.
 
 Subscription billing remains out of scope ([CLIENT-SUBSCRIPTION-BILLING.md](CLIENT-SUBSCRIPTION-BILLING.md), D-021).

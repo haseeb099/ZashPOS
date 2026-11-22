@@ -2,13 +2,16 @@
 
 namespace Modules\ZashPay\Tests\Feature;
 
+use App\Classes\ModuleRouting;
 use App\Models\Order;
 use App\Models\OrderPayment;
 use App\Models\PaymentType;
+use App\Models\Role;
 use App\Services\ModulesService;
 use App\Services\UpdateService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 use Modules\ZashPay\Models\TerminalAttempt;
 use Modules\ZashPay\Services\ZashPayAddonGate;
@@ -301,6 +304,117 @@ final class ZashPayTerminalSimulatorTest extends TestCase
         }
     }
 
+    public function test_public_add_payment_rejects_caller_supplied_integrated_identifier(): void
+    {
+        $this->attemptAuthenticate();
+        $order = $this->createUnpaidOrder();
+
+        $response = $this->json( 'POST', 'api/orders/' . $order->id . '/payments', [
+            'identifier' => OrderPayment::PAYMENT_CARD_INTEGRATED,
+            'value' => (float) $order->total,
+            'reference' => 'spoofed-ref',
+        ] );
+
+        $response->assertStatus( 422 );
+        $this->assertSame( 0, OrderPayment::query()->where( 'order_id', $order->id )->count() );
+    }
+
+    public function test_public_add_payment_rejects_integrated_when_addon_disabled(): void
+    {
+        ns()->option->set( ZashPayAddonGate::OPTION_ENABLED, 'no' );
+        app( ZashPayAddonGate::class )->syncPaymentTypeVisibility();
+
+        $this->attemptAuthenticate();
+        $order = $this->createUnpaidOrder();
+
+        $response = $this->json( 'POST', 'api/orders/' . $order->id . '/payments', [
+            'identifier' => OrderPayment::PAYMENT_CARD_INTEGRATED,
+            'value' => (float) $order->total,
+        ] );
+
+        $response->assertStatus( 422 );
+        $this->assertSame( 0, OrderPayment::query()->where( 'order_id', $order->id )->count() );
+    }
+
+    public function test_order_create_rejects_caller_supplied_integrated_payment(): void
+    {
+        $this->attemptAuthenticate();
+        $this->count = 1;
+
+        $httpResponse = null;
+        $this->processOrders( [
+            'coupons' => [],
+            'payments' => [
+                [
+                    'identifier' => OrderPayment::PAYMENT_CARD_INTEGRATED,
+                    'value' => 10,
+                ],
+            ],
+        ], function ( $response ) use ( &$httpResponse ) {
+            $httpResponse = $response;
+        } );
+
+        $this->assertNotNull( $httpResponse );
+        $this->assertTrue(
+            $httpResponse->status() >= 400 || ( $httpResponse->json( 'status' ) === 'error' ),
+            'Caller-supplied integrated payment must be rejected on order create.'
+        );
+        $this->assertStringContainsStringIgnoringCase(
+            'integrated',
+            (string) ( $httpResponse->json( 'message' ) ?? '' )
+        );
+    }
+
+    public function test_competing_ordinary_payment_blocked_while_terminal_pending(): void
+    {
+        $this->attemptAuthenticate();
+        $order = $this->createUnpaidOrder();
+
+        $this->json( 'POST', 'api/zash-pay/orders/' . $order->id . '/attempts', [
+            'idempotency_key' => 'compete-' . uniqid(),
+            'provider' => 'simulator',
+            'scenario' => 'timeout',
+        ] )->assertOk();
+
+        $cash = $this->json( 'POST', 'api/orders/' . $order->id . '/payments', [
+            'identifier' => OrderPayment::PAYMENT_CASH,
+            'value' => (float) $order->total,
+        ] );
+        $cash->assertForbidden();
+
+        $spoof = $this->json( 'POST', 'api/orders/' . $order->id . '/payments', [
+            'identifier' => OrderPayment::PAYMENT_CARD_INTEGRATED,
+            'value' => (float) $order->total,
+        ] );
+        $spoof->assertStatus( 422 );
+
+        $this->assertSame( 0, OrderPayment::query()->where( 'order_id', $order->id )->count() );
+    }
+
+    public function test_competing_terminal_settle_then_ordinary_payment_rejected_as_paid(): void
+    {
+        $this->attemptAuthenticate();
+        $order = $this->createUnpaidOrder();
+
+        $settle = $this->json( 'POST', 'api/zash-pay/orders/' . $order->id . '/attempts', [
+            'idempotency_key' => 'settle-first-' . uniqid(),
+            'provider' => 'simulator',
+            'scenario' => 'approve',
+        ] );
+        $settle->assertOk();
+        $settle->assertJsonPath( 'data.settled', true );
+
+        $order->refresh();
+        $this->assertSame( Order::PAYMENT_PAID, $order->payment_status );
+
+        $cash = $this->json( 'POST', 'api/orders/' . $order->id . '/payments', [
+            'identifier' => OrderPayment::PAYMENT_CASH,
+            'value' => 1,
+        ] );
+        $cash->assertForbidden();
+        $this->assertSame( 1, OrderPayment::query()->where( 'order_id', $order->id )->count() );
+    }
+
     protected function enableZashPay(): void
     {
         Cache::forget( 'ns-core-installed' );
@@ -316,6 +430,27 @@ final class ZashPayTerminalSimulatorTest extends TestCase
 
         $migrationResult = $modules->runAllMigration( 'ZashPay' );
         $this->assertSame( 'success', $migrationResult['status'] ?? null );
+        $modules->loadModulesMigrations();
+
+        $admin = Role::namespace( Role::ADMIN );
+        if ( $admin ) {
+            $admin->addPermissions( [
+                'zash.pay.manage',
+                'zash.pay.charge',
+                'zash.pay.refund',
+            ] );
+        }
+
+        ns()->registerGatePermissions();
+
+        $modules->load();
+        $module = $modules->get( 'ZashPay' );
+        $this->assertIsArray( $module, 'ZashPay should be discoverable after enable.' );
+        $modules->boot( $module );
+
+        if ( ! Route::has( 'zash-pay.api.attempts.store' ) ) {
+            ModuleRouting::mapModuleApiRoutes( $module );
+        }
     }
 
     protected function createUnpaidOrder(): Order

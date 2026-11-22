@@ -2,7 +2,9 @@
 
 namespace App\Http\Requests;
 
+use App\Models\OrderPayment;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Validator;
 
 class OrderPaymentRequest extends FormRequest
 {
@@ -28,5 +30,17 @@ class OrderPaymentRequest extends FormRequest
             'value' => 'required|numeric',
             'reference' => 'nullable|string|max:191',
         ];
+    }
+
+    public function withValidator( Validator $validator ): void
+    {
+        $validator->after( function ( Validator $validator ): void {
+            if ( $this->input( 'identifier' ) === OrderPayment::PAYMENT_CARD_INTEGRATED ) {
+                $validator->errors()->add(
+                    'identifier',
+                    __( 'Integrated PDQ payments can only be recorded by the terminal settlement service.' )
+                );
+            }
+        } );
     }
 }
