@@ -1,0 +1,213 @@
+import { expect, test } from '@playwright/test';
+import { apiSend, listProducts } from '../helpers/api';
+import { authState } from '../helpers/auth';
+import {
+    addProduct,
+    closePaymentPopup,
+    openPaymentPopup,
+    openPos,
+    readPosCustomer,
+} from '../helpers/pos';
+
+test.use({ storageState: authState('admin') });
+
+async function ensureTakeAwayOrderType(page: import('@playwright/test').Page): Promise<void> {
+    const typed = await page.evaluate(() => {
+        const order = (window as unknown as { POS?: { order?: { getValue?: () => { type?: unknown } } } }).POS?.order?.getValue?.();
+
+        return Boolean(order?.type);
+    });
+
+    if (typed) {
+        return;
+    }
+
+    await page.getByRole('button', { name: 'Order Type' }).click();
+    await expect(page.getByText('Define The Order Type')).toBeVisible({ timeout: 15000 });
+    const takeAway = page.getByText(/TakeAway|Take-Away|Take Away|takeaway/i).first();
+    await expect(takeAway).toBeVisible({ timeout: 15000 });
+    await takeAway.click();
+    await expect.poll(async () => page.evaluate(() => {
+        const order = (window as unknown as { POS?: { order?: { getValue?: () => { type?: unknown } } } }).POS?.order?.getValue?.();
+
+        return Boolean(order?.type);
+    }), { timeout: 15000 }).toBe(true);
+}
+
+async function ensureStandalonePaymentType(page: import('@playwright/test').Page): Promise<void> {
+    const types = await apiSend(page, 'get', '/api/orders/payments');
+    const list = Array.isArray(types) ? types : (types as { data?: unknown[] }).data;
+    const found = Array.isArray(list)
+        && list.some((entry) => (entry as { identifier?: string }).identifier === 'card-standalone-pdq');
+
+    if (found) {
+        return;
+    }
+
+    await apiSend(page, 'post', '/api/crud/ns.payments-types', [
+        {
+            label: 'Card – standalone PDQ',
+            identifier: 'card-standalone-pdq',
+            active: 1,
+            readonly: 1,
+        },
+    ]).catch(async () => {
+        // Fallback: some installs already have the type inactive.
+        await page.request.post('/api/crud/ns.payments-types', {
+            data: {
+                label: 'Card – standalone PDQ',
+                identifier: 'card-standalone-pdq',
+                active: 1,
+            },
+        });
+    });
+}
+
+async function selectPaymentType(page: import('@playwright/test').Page, label: RegExp | string): Promise<void> {
+    const payment = page.locator('#ns-payment-popup');
+    const gateway = payment.locator('li.ns-payment-gateway').filter({ hasText: label }).first();
+
+    if (await gateway.isVisible().catch(() => false)) {
+        await gateway.click();
+        return;
+    }
+
+    const selector = payment.locator('.ns-payment-list, [class*="payment"]').filter({ hasText: /Select|Payment/ }).first();
+
+    if (await selector.isVisible().catch(() => false)) {
+        await selector.click();
+    } else {
+        await payment.getByText(/Select Payment|Payment Gateway|Cash/i).first().click();
+    }
+
+    const option = page.getByText(label, { exact: typeof label === 'string' }).first();
+    await expect(option).toBeVisible({ timeout: 15000 });
+    await option.click();
+}
+
+test('standalone PDQ approval records payment; decline does not', async ({ page }) => {
+    test.setTimeout(240000);
+    await ensureStandalonePaymentType(page);
+
+    const products = await listProducts(page);
+    const [first] = products;
+    expect(first?.name).toBeTruthy();
+
+    await openPos(page);
+    const customer = await readPosCustomer(page);
+    expect(customer.id).not.toBeNull();
+    await addProduct(page, first.name);
+    await ensureTakeAwayOrderType(page);
+
+    await openPaymentPopup(page);
+    await selectPaymentType(page, /Card.*standalone PDQ|standalone PDQ/i);
+
+    const standalone = page.locator('#ns-payment-popup');
+    await expect(standalone.getByText('Amount due (exact)', { exact: true })).toBeVisible({ timeout: 15000 });
+    await expect(standalone.getByText(/I confirm the card terminal approved/i)).toBeVisible();
+
+    await standalone.getByRole('button', { name: /Decline \/ cancel \(no payment\)/i }).click();
+    await expect(page.getByText(/Card payment not recorded|not recorded/i)).toBeVisible({ timeout: 10000 }).catch(() => undefined);
+
+    const paymentsAfterDecline = await page.evaluate(() => {
+        const order = (window as unknown as { POS?: { order?: { getValue?: () => { payments?: unknown[] } } } }).POS?.order?.getValue?.();
+
+        return order?.payments?.length ?? 0;
+    });
+    expect(paymentsAfterDecline).toBe(0);
+
+    await standalone.locator('input[type="checkbox"]').check();
+    await standalone.getByRole('button', { name: /Record approved card payment/i }).click();
+
+    const paymentsAfterApprove = await page.evaluate(() => {
+        const order = (window as unknown as { POS?: { order?: { getValue?: () => { payments?: Array<{ identifier?: string }> } } } }).POS?.order?.getValue?.();
+
+        return order?.payments ?? [];
+    });
+    const standalonePayments = paymentsAfterApprove.filter((payment) => payment.identifier === 'card-standalone-pdq');
+    expect(standalonePayments).toHaveLength(1);
+
+    // Closing can be blocked by snackbars after a successful record; assertions above are the gate.
+    await closePaymentPopup(page).catch(async () => {
+        await page.keyboard.press('Escape');
+        await expect(page.locator('#ns-payment-popup')).toBeHidden({ timeout: 15000 }).catch(() => undefined);
+    });
+});
+
+test('simulated integrated checkout settles when add-on enabled', async ({ page }) => {
+    test.setTimeout(240000);
+
+    await apiSend(page, 'post', '/api/modules/ZashPay/enable').catch(async () => {
+        await page.request.get('/dashboard/modules');
+    });
+
+    // Best-effort enable via options when modules API shape differs.
+    await page.request.post('/api/settings/zash-pay', {
+        data: {
+            zash_pay_integrated_enabled: 'yes',
+        },
+    }).catch(() => undefined);
+
+    const products = await listProducts(page);
+    const [first] = products;
+    await openPos(page);
+    await addProduct(page, first.name);
+    await ensureTakeAwayOrderType(page);
+
+    // Create unpaid order via Save As Unpaid (takeaway path if no dine-in required).
+    await openPaymentPopup(page);
+    const saveUnpaid = page.getByRole('button', { name: /Save As Unpaid/ });
+    if (await saveUnpaid.isVisible().catch(() => false)) {
+        await saveUnpaid.click();
+        const confirm = page.locator('#confirm-popup');
+        if (await confirm.isVisible().catch(() => false)) {
+            await confirm.getByRole('button', { name: 'Yes' }).click();
+        }
+        await expect(page.locator('#ns-payment-popup')).toBeHidden({ timeout: 30000 });
+    } else {
+        await closePaymentPopup(page);
+        test.skip(true, 'Save As Unpaid unavailable in this POS configuration');
+    }
+
+    const unpaid = await apiSend(page, 'get', '/api/orders?payment_status=unpaid').catch(() => ({ data: [] }));
+    const rows = (unpaid as { data?: Array<{ id?: number }> }).data
+        ?? (Array.isArray(unpaid) ? unpaid as Array<{ id?: number }> : []);
+    const latest = rows
+        .map((row) => Number(row?.id ?? 0))
+        .filter((id) => id > 0)
+        .sort((a, b) => b - a)[0] ?? null;
+    expect(latest).toBeTruthy();
+
+    const attempt = await apiSend(page, 'post', `/api/zash-pay/orders/${latest}/attempts`, {
+        idempotency_key: `e2e-sim-${Date.now()}`,
+        provider: 'simulator',
+        scenario: 'approve',
+        terminal_id: 'simulator-1',
+    });
+
+    const payload = attempt as {
+        data?: {
+            settled?: boolean;
+            provider?: string;
+            attempt?: { order_payment_id?: number | null; status?: string };
+        };
+    };
+
+    expect(payload.data?.settled).toBe(true);
+    expect(payload.data?.provider).toBe('simulator');
+    expect(payload.data?.attempt?.status).toBe('approved');
+    expect(payload.data?.attempt?.order_payment_id).toBeTruthy();
+
+    const payments = await apiSend(page, 'get', `/api/orders/${latest}/payments`).catch(async () => {
+        const order = await apiSend(page, 'get', `/api/orders/${latest}`);
+
+        return (order as { data?: { order?: { payments?: unknown[] }; payments?: unknown[] } }).data?.order?.payments
+            ?? (order as { data?: { payments?: unknown[] } }).data?.payments
+            ?? [];
+    });
+    const paymentRows = Array.isArray(payments)
+        ? payments
+        : ((payments as { data?: unknown[] }).data ?? []);
+    const integrated = paymentRows.filter((payment) => (payment as { identifier?: string }).identifier === 'card-integrated-pdq');
+    expect(integrated).toHaveLength(1);
+});

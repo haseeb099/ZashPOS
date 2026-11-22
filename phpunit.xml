@@ -53,6 +53,7 @@
       <directory suffix="CreateOrderPaidWithCustomerCredit.php">./tests/Feature</directory>
       <directory suffix="CreateOrderWithDifferentProductPriceMode.php">./tests/Feature</directory>
       <directory suffix="CreateCustomPaymentTypeAndOrder.php">./tests/Feature</directory>
+      <directory suffix="CardStandalonePdqPaymentTest.php">./tests/Feature</directory>
       <directory suffix="DeleteOrderTest.php">./tests/Feature</directory>
       <directory suffix="OrderRefundTest.php">./tests/Feature</directory>
       <directory suffix="OrderHoldTest.php">./tests/Feature</directory>
@@ -70,6 +71,9 @@
     </testsuite>
     <testsuite name="ZashDine">
       <directory suffix="Test.php">./modules/ZashDine/Tests</directory>
+    </testsuite>
+    <testsuite name="ZashPay">
+      <directory suffix="Test.php">./modules/ZashPay/Tests</directory>
     </testsuite>
   </testsuites>
   <coverage>

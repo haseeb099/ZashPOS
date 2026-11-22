@@ -158,18 +158,23 @@ artisanOrFail([
     '--language=en',
 ]);
 
-artisanOrFail(['modules:enable', 'ZashDine']);
+function enableAndMigrateModule(namespace) {
+    artisanOrFail(['modules:enable', namespace]);
 
-const migrate = artisan(['modules:migrate', 'ZashDine', '--force']);
+    const migrate = artisan(['modules:migrate', namespace, '--force']);
 
-if (migrate.status !== 0) {
-    if (!migrate.output.includes('option does not exist')) {
-        throw new Error('php artisan modules:migrate ZashDine --force failed.');
+    if (migrate.status !== 0) {
+        if (!migrate.output.includes('option does not exist')) {
+            throw new Error(`php artisan modules:migrate ${namespace} --force failed.`);
+        }
+
+        process.stdout.write(`modules:migrate has no --force option; retrying ${namespace} without it.\n`);
+        artisanOrFail(['modules:migrate', namespace]);
     }
-
-    process.stdout.write('modules:migrate has no --force option; retrying without it.\n');
-    artisanOrFail(['modules:migrate', 'ZashDine']);
 }
+
+enableAndMigrateModule('ZashDine');
+enableAndMigrateModule('ZashPay');
 
 artisanOrFail(['db:seed', '--class=Database\\Seeders\\DefaultUnitGroupSeeder', '--no-interaction', '--force']);
 artisanOrFail(['ns:categories:generate', '--count=4']);
@@ -181,4 +186,12 @@ const provisioned = artisan(['tinker', '--execute', `require '${provision}';`]);
 if (provisioned.status !== 0 || !provisioned.output.includes('E2E waiter, cashier and chef users are ready.')) {
     throw new Error('Unable to create the Playwright waiter, cashier and chef users.');
 }
+
+const provisionPay = path.join(e2eRoot, 'scripts', 'provision-zashpay.php').replace(/\\/g, '/');
+const provisionedPay = artisan(['tinker', '--execute', `require '${provisionPay}';`]);
+
+if (provisionedPay.status !== 0 || !provisionedPay.output.includes('E2E ZashPay simulator environment is ready.')) {
+    throw new Error('Unable to prepare the ZashPay simulator environment for Playwright.');
+}
+
 artisanOrFail(['cache:clear']);

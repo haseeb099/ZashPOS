@@ -35,9 +35,12 @@ class HardResetTest extends TestCase
         $response->assertStatus( 200 );
         $this->assertFalse( Schema::hasTable( 'hard_reset_probe' ) );
 
-        // Check if 3 order payments have been created
-        $paymentTypeCount = PaymentType::count();
-        $this->assertEquals( 3, $paymentTypeCount );
+        // Base payment types must include cash, bank, account, and standalone PDQ.
+        $identifiers = PaymentType::query()->pluck( 'identifier' )->all();
+        foreach ( ['cash-payment', 'bank-payment', 'account-payment', 'card-standalone-pdq'] as $identifier ) {
+            $this->assertContains( $identifier, $identifiers );
+        }
+        $this->assertGreaterThanOrEqual( 4, count( $identifiers ) );
 
         return $this->assertTrue( true );
     }

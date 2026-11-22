@@ -5,4 +5,5 @@ export class Payment {
     readonly: boolean;
     value: number;
     id?: number;
+    reference?: string;
 }

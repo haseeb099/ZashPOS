@@ -9,12 +9,13 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 
 /**
- * @property int    $id
- * @property int    $order_id
- * @property float  $value
- * @property int    $author_id
- * @property string $identifier
- * @property string $uuid
+ * @property int         $id
+ * @property int         $order_id
+ * @property float       $value
+ * @property int         $author_id
+ * @property string      $identifier
+ * @property string      $uuid
+ * @property string|null $reference
  */
 class OrderPayment extends NsModel
 {
@@ -27,6 +28,10 @@ class OrderPayment extends NsModel
     const PAYMENT_ACCOUNT = 'account-payment';
 
     const PAYMENT_BANK = 'bank-payment';
+
+    const PAYMENT_CARD_STANDALONE = 'card-standalone-pdq';
+
+    const PAYMENT_CARD_INTEGRATED = 'card-integrated-pdq';
 
     public $dispatchesEvents = [
         'created' => OrderPaymentAfterCreatedEvent::class,

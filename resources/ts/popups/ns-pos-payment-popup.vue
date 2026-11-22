@@ -5,6 +5,7 @@ import { Popup } from '~/libraries/popup';
 import { __ } from '~/libraries/lang';
 import CashPayment from "~/pages/dashboard/pos/payments/cash-payment.vue";
 import CreditCardPayment from "~/pages/dashboard/pos/payments/creditcard-payment.vue";
+import CardStandalonePdqPayment from "~/pages/dashboard/pos/payments/card-standalone-pdq.vue";
 import BankPayment from '~/pages/dashboard/pos/payments/bank-payment.vue';
 import AccountPayment from '~/pages/dashboard/pos/payments/account-payment.vue';
 import nsPosLoadingPopupVue from './ns-pos-loading-popup.vue';
@@ -91,6 +92,9 @@ export default {
                 break;
                 case 'creditcard-payment':
                     this.currentPaymentComponent    =   shallowRef( CreditCardPayment );
+                break;
+                case 'card-standalone-pdq':
+                    this.currentPaymentComponent    =   shallowRef( CardStandalonePdqPayment );
                 break;
                 case 'bank-payment':
                     this.currentPaymentComponent    =   shallowRef( BankPayment );
