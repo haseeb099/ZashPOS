@@ -11,6 +11,29 @@ import {
 
 test.use({ storageState: authState('admin') });
 
+async function ensureTakeAwayOrderType(page: import('@playwright/test').Page): Promise<void> {
+    const typed = await page.evaluate(() => {
+        const order = (window as unknown as { POS?: { order?: { getValue?: () => { type?: unknown } } } }).POS?.order?.getValue?.();
+
+        return Boolean(order?.type);
+    });
+
+    if (typed) {
+        return;
+    }
+
+    await page.getByRole('button', { name: 'Order Type' }).click();
+    await expect(page.getByText('Define The Order Type')).toBeVisible({ timeout: 15000 });
+    const takeAway = page.getByText(/TakeAway|Take-Away|Take Away|takeaway/i).first();
+    await expect(takeAway).toBeVisible({ timeout: 15000 });
+    await takeAway.click();
+    await expect.poll(async () => page.evaluate(() => {
+        const order = (window as unknown as { POS?: { order?: { getValue?: () => { type?: unknown } } } }).POS?.order?.getValue?.();
+
+        return Boolean(order?.type);
+    }), { timeout: 15000 }).toBe(true);
+}
+
 async function ensureStandalonePaymentType(page: import('@playwright/test').Page): Promise<void> {
     const types = await apiSend(page, 'get', '/api/orders/payments');
     const list = Array.isArray(types) ? types : (types as { data?: unknown[] }).data;
@@ -42,6 +65,13 @@ async function ensureStandalonePaymentType(page: import('@playwright/test').Page
 
 async function selectPaymentType(page: import('@playwright/test').Page, label: RegExp | string): Promise<void> {
     const payment = page.locator('#ns-payment-popup');
+    const gateway = payment.locator('li.ns-payment-gateway').filter({ hasText: label }).first();
+
+    if (await gateway.isVisible().catch(() => false)) {
+        await gateway.click();
+        return;
+    }
+
     const selector = payment.locator('.ns-payment-list, [class*="payment"]').filter({ hasText: /Select|Payment/ }).first();
 
     if (await selector.isVisible().catch(() => false)) {
@@ -67,14 +97,15 @@ test('standalone PDQ approval records payment; decline does not', async ({ page 
     const customer = await readPosCustomer(page);
     expect(customer.id).not.toBeNull();
     await addProduct(page, first.name);
+    await ensureTakeAwayOrderType(page);
 
     await openPaymentPopup(page);
     await selectPaymentType(page, /Card.*standalone PDQ|standalone PDQ/i);
 
     const standalone = page.locator('#ns-payment-popup');
-    await expect(standalone.getByText(/Amount due|exact/i)).toBeVisible({ timeout: 15000 });
+    await expect(standalone.getByText(/I confirm the card terminal approved|Amount due \(exact\)/i)).toBeVisible({ timeout: 15000 });
 
-    await standalone.getByRole('button', { name: /Decline|cancel/i }).click();
+    await standalone.getByRole('button', { name: /Decline \/ cancel|Decline|cancel/i }).click();
     await expect(page.getByText(/Card payment not recorded|not recorded/i)).toBeVisible({ timeout: 10000 }).catch(() => undefined);
 
     const paymentsAfterDecline = await page.evaluate(() => {
@@ -115,6 +146,7 @@ test('simulated integrated checkout settles when add-on enabled', async ({ page 
     const [first] = products;
     await openPos(page);
     await addProduct(page, first.name);
+    await ensureTakeAwayOrderType(page);
 
     // Create unpaid order via Save As Unpaid (takeaway path if no dine-in required).
     await openPaymentPopup(page);
