@@ -286,6 +286,16 @@ class SetupService
         $customerAccountType->readonly = true;
         $customerAccountType->author_id = $user->id;
         $customerAccountType->save();
+
+        if ( ! PaymentType::query()->where( 'identifier', 'card-standalone-pdq' )->exists() ) {
+            $cardStandalone = new PaymentType;
+            $cardStandalone->label = __( 'Card – standalone PDQ' );
+            $cardStandalone->identifier = 'card-standalone-pdq';
+            $cardStandalone->active = true;
+            $cardStandalone->readonly = true;
+            $cardStandalone->author_id = $user->id;
+            $cardStandalone->save();
+        }
     }
 
     public function testDBConnexion()

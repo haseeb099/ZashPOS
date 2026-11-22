@@ -963,6 +963,13 @@ class OrdersService
         $orderPayment->value = $this->currencyService->define( $payment['value'] )->toFloat();
         $orderPayment->author_id = $order->author_id;
 
+        if ( array_key_exists( 'reference', $payment ) ) {
+            $reference = $payment['reference'];
+            $orderPayment->reference = is_string( $reference ) && $reference !== ''
+                ? mb_substr( $reference, 0, 191 )
+                : null;
+        }
+
         return $orderPayment;
     }
 

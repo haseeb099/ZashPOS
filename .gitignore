@@ -17,6 +17,8 @@ modules/.temp/*
 !modules/index.html
 !modules/ZashDine/
 !modules/ZashDine/**/
+!modules/ZashPay/
+!modules/ZashPay/**/
 public/modules/*
 public/storage
 public/export/*

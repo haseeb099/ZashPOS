@@ -1,0 +1,11 @@
+<?xml version="1.0" ?>
+<module>
+    <namespace>ZashPay</namespace>
+    <version>1.0.0</version>
+    <author>ZashPOS</author>
+    <name>ZashPay</name>
+    <description>
+        <locale lang="en">Optional integrated PDQ card payments for ZashPOS (simulator first; real terminal connectors later).</locale>
+    </description>
+    <core min-version="6.3.0" />
+</module>

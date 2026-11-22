@@ -123,7 +123,12 @@ $pos_vat          =   $order->settings?->where( 'key', 'ns_pos_vat' )->first()?-
                     @if ( ns()->option->get( 'ns_invoice_show_payment_rows', 'yes' ) === 'yes' )
                     @foreach( $order->payments as $payment )
                     <tr>
-                        <td class="p-2 border-b border-gray-800 text-sm font-semibold" colspan="2">{{ $paymentTypes[ $payment[ 'identifier' ] ] ?? __( 'Unknown Payment' ) }}</td>
+                        <td class="p-2 border-b border-gray-800 text-sm font-semibold" colspan="2">
+                            {{ $paymentTypes[ $payment[ 'identifier' ] ] ?? __( 'Unknown Payment' ) }}
+                            @if ( ! empty( $payment[ 'reference' ] ) )
+                                <span class="font-normal"> — {{ __( 'Ref' ) }}: {{ $payment[ 'reference' ] }}</span>
+                            @endif
+                        </td>
                         <td class="p-2 border-b border-gray-800 text-sm text-right">{{ ns()->currency->define( $payment[ 'value' ] ) }}</td>
                     </tr>
                     @endforeach

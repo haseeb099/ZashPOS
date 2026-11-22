@@ -363,6 +363,7 @@ class OrdersController extends DashboardController
             'identifier' => $request->input( 'identifier' ),
             'value' => $request->input( 'value' ),
             'register_id' => $request->input( 'register_id' ),
+            'reference' => $request->input( 'reference' ),
         ], $order );
     }
 

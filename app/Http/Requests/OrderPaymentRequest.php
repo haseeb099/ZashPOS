@@ -26,6 +26,7 @@ class OrderPaymentRequest extends FormRequest
         return [
             'identifier' => 'required',
             'value' => 'required|numeric',
+            'reference' => 'nullable|string|max:191',
         ];
     }
 }
