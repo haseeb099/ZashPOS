@@ -11,6 +11,7 @@ use Modules\ZashPay\Connectors\SimulatorConnector;
 use Modules\ZashPay\Connectors\TerminalConnector;
 use Modules\ZashPay\Connectors\TerminalConnectorResult;
 use Modules\ZashPay\Models\TerminalAttempt;
+use Modules\ZashPay\Models\TerminalRefund;
 
 class TerminalPaymentService
 {
@@ -18,10 +19,16 @@ class TerminalPaymentService
         protected ZashPayAddonGate $gate,
         protected OrdersService $ordersService,
         protected SimulatorConnector $simulator,
+        protected ZashPayEnvironment $environment,
+        protected UnresolvedTerminalAttemptGuard $unresolvedGuard,
     ) {}
 
     public function connectorFor( string $provider = 'simulator' ): TerminalConnector
     {
+        if ( $provider === 'simulator' && ! $this->environment->allowsSimulator() ) {
+            throw new NotAllowedException( __( 'The card terminal simulator is unavailable on live installations.' ) );
+        }
+
         return match ( $provider ) {
             'simulator' => $this->simulator,
             default => throw new NotAllowedException( __( 'Unknown card terminal provider.' ) ),
@@ -43,7 +50,8 @@ class TerminalPaymentService
             throw new NotAllowedException( __( 'An idempotency key is required.' ) );
         }
 
-        return DB::transaction( function () use ( $order, $input, $authorId, $provider, $connector, $idempotencyKey ) {
+        return DB::transaction( function () use ( $order, $input, $authorId, $connector, $idempotencyKey ) {
+            // Lock order first, then attempt rows (consistent lock order).
             $order = Order::query()->whereKey( $order->id )->lockForUpdate()->firstOrFail();
 
             $existing = TerminalAttempt::query()
@@ -52,7 +60,9 @@ class TerminalPaymentService
                 ->first();
 
             if ( $existing ) {
-                return $this->refreshAndMaybeSettle( $existing, $connector );
+                $this->assertIdempotencyMatches( $existing, $order, $input );
+
+                return $this->refreshAndMaybeSettle( $existing, $connector, $order );
             }
 
             $this->assertNoBlockingOpenAttempt( $order );
@@ -63,18 +73,25 @@ class TerminalPaymentService
                 throw new NotAllowedException( __( 'This order has no remaining balance to charge.' ) );
             }
 
-            $attempt = TerminalAttempt::query()->create( [
-                'order_id' => $order->id,
-                'register_id' => isset( $input['register_id'] ) ? (int) $input['register_id'] : null,
-                'author_id' => $authorId,
-                'terminal_id' => (string) ( $input['terminal_id'] ?? 'simulator-1' ),
-                'amount_minor' => $amountMinor,
-                'currency' => $currency,
-                'idempotency_key' => $idempotencyKey,
-                'status' => TerminalAttempt::STATUS_PENDING,
-                'provider' => $connector->provider(),
-                'scenario' => isset( $input['scenario'] ) ? (string) $input['scenario'] : 'approve',
-            ] );
+            $scenario = isset( $input['scenario'] ) ? (string) $input['scenario'] : 'approve';
+            if ( $connector->provider() === 'simulator' && ! $this->environment->allowsSimulator() ) {
+                throw new NotAllowedException( __( 'The card terminal simulator is unavailable on live installations.' ) );
+            }
+
+            $attempt = new TerminalAttempt;
+            $attempt->order_id = $order->id;
+            $attempt->register_id = array_key_exists( 'register_id', $input ) && $input['register_id'] !== null
+                ? (int) $input['register_id']
+                : null;
+            $attempt->author_id = $authorId;
+            $attempt->terminal_id = (string) ( $input['terminal_id'] ?? 'simulator-1' );
+            $attempt->amount_minor = $amountMinor;
+            $attempt->currency = $currency;
+            $attempt->idempotency_key = $idempotencyKey;
+            $attempt->status = TerminalAttempt::STATUS_PENDING;
+            $attempt->provider = $connector->provider();
+            $attempt->scenario = $scenario;
+            $attempt->save();
 
             $result = $connector->checkout( $attempt );
             $this->applyConnectorResult( $attempt, $result );
@@ -91,10 +108,11 @@ class TerminalPaymentService
         $this->gate->assertEnabled();
 
         return DB::transaction( function () use ( $attempt ) {
+            $order = Order::query()->whereKey( $attempt->order_id )->lockForUpdate()->firstOrFail();
             $attempt = TerminalAttempt::query()->whereKey( $attempt->id )->lockForUpdate()->firstOrFail();
             $connector = $this->connectorFor( $attempt->provider );
 
-            return $this->refreshAndMaybeSettle( $attempt, $connector );
+            return $this->refreshAndMaybeSettle( $attempt, $connector, $order );
         } );
     }
 
@@ -106,6 +124,7 @@ class TerminalPaymentService
         $this->gate->assertEnabled();
 
         return DB::transaction( function () use ( $attempt ) {
+            Order::query()->whereKey( $attempt->order_id )->lockForUpdate()->firstOrFail();
             $attempt = TerminalAttempt::query()->whereKey( $attempt->id )->lockForUpdate()->firstOrFail();
 
             if ( $attempt->isSettled() ) {
@@ -118,15 +137,13 @@ class TerminalPaymentService
 
             return [
                 'attempt' => $attempt->fresh(),
-                'settled' => false,
+                'settled' => $this->isSettledResponse( $attempt->fresh() ),
                 'provider' => $attempt->provider,
             ];
         } );
     }
 
     /**
-     * Explicit reconcile for unknown / timed_out attempts.
-     *
      * @return array{attempt: TerminalAttempt, settled: bool, provider: string}
      */
     public function reconcile( TerminalAttempt $attempt, string $decision ): array
@@ -138,10 +155,16 @@ class TerminalPaymentService
         }
 
         return DB::transaction( function () use ( $attempt, $decision ) {
+            $order = Order::query()->whereKey( $attempt->order_id )->lockForUpdate()->firstOrFail();
             $attempt = TerminalAttempt::query()->whereKey( $attempt->id )->lockForUpdate()->firstOrFail();
 
-            if ( ! in_array( $attempt->status, [TerminalAttempt::STATUS_UNKNOWN, TerminalAttempt::STATUS_TIMED_OUT, TerminalAttempt::STATUS_PENDING], true ) ) {
-                throw new NotAllowedException( __( 'Only pending, unknown, or timed-out attempts can be reconciled.' ) );
+            if ( ! in_array( $attempt->status, [
+                TerminalAttempt::STATUS_UNKNOWN,
+                TerminalAttempt::STATUS_TIMED_OUT,
+                TerminalAttempt::STATUS_PENDING,
+                TerminalAttempt::STATUS_APPROVED,
+            ], true ) || $attempt->order_payment_id ) {
+                throw new NotAllowedException( __( 'Only unresolved terminal attempts can be reconciled.' ) );
             }
 
             if ( $decision === 'decline' ) {
@@ -159,31 +182,83 @@ class TerminalPaymentService
             $attempt->status = TerminalAttempt::STATUS_APPROVED;
             $attempt->save();
 
-            $order = Order::query()->whereKey( $attempt->order_id )->lockForUpdate()->firstOrFail();
-
             return $this->settleIfApproved( $attempt->fresh(), $order );
         } );
     }
 
     /**
-     * @return array{attempt: TerminalAttempt, refund: TerminalConnectorResult}
+     * @return array{attempt: TerminalAttempt, refund: TerminalRefund}
      */
-    public function refundAttempt( TerminalAttempt $attempt, ?int $amountMinor = null ): array
+    public function refundAttempt( TerminalAttempt $attempt, string $idempotencyKey, int $authorId, ?int $amountMinor = null ): array
     {
         $this->gate->assertEnabled();
 
-        if ( ! $attempt->isSettled() ) {
-            throw new NotAllowedException( __( 'Only settled integrated payments can be refunded via ZashPay.' ) );
+        if ( ! $this->environment->allowsAccountingRefunds() ) {
+            throw new NotAllowedException( __( 'Card terminal refunds are disabled until order accounting settlement is implemented.' ) );
         }
 
-        $amount = $amountMinor ?? $attempt->amount_minor;
-        $connector = $this->connectorFor( $attempt->provider );
-        $result = $connector->refund( $attempt, $amount );
+        if ( $idempotencyKey === '' ) {
+            throw new NotAllowedException( __( 'An idempotency key is required for refunds.' ) );
+        }
 
-        return [
-            'attempt' => $attempt->fresh(),
-            'refund' => $result,
-        ];
+        return DB::transaction( function () use ( $attempt, $idempotencyKey, $authorId, $amountMinor ) {
+            Order::query()->whereKey( $attempt->order_id )->lockForUpdate()->firstOrFail();
+            $attempt = TerminalAttempt::query()->whereKey( $attempt->id )->lockForUpdate()->firstOrFail();
+
+            if ( ! $attempt->isSettled() ) {
+                throw new NotAllowedException( __( 'Only settled integrated payments can be refunded via ZashPay.' ) );
+            }
+
+            $existing = TerminalRefund::query()
+                ->where( 'idempotency_key', $idempotencyKey )
+                ->lockForUpdate()
+                ->first();
+
+            if ( $existing ) {
+                if ( (int) $existing->terminal_attempt_id !== (int) $attempt->id ) {
+                    throw new NotAllowedException( __( 'Refund idempotency key is already bound to another terminal attempt.' ) );
+                }
+
+                return [
+                    'attempt' => $attempt,
+                    'refund' => $existing,
+                ];
+            }
+
+            $amount = $amountMinor ?? $attempt->amount_minor;
+            if ( $amount < 1 ) {
+                throw new NotAllowedException( __( 'Refund amount must be at least 1 minor unit.' ) );
+            }
+
+            $alreadyRefunded = (int) TerminalRefund::query()
+                ->where( 'terminal_attempt_id', $attempt->id )
+                ->where( 'status', TerminalRefund::STATUS_RECORDED )
+                ->sum( 'amount_minor' );
+
+            if ( ( $alreadyRefunded + $amount ) > (int) $attempt->amount_minor ) {
+                throw new NotAllowedException( __( 'Refund would exceed the original terminal charge.' ) );
+            }
+
+            $connector = $this->connectorFor( $attempt->provider );
+            $result = $connector->refund( $attempt, $amount );
+
+            $refund = new TerminalRefund;
+            $refund->terminal_attempt_id = $attempt->id;
+            $refund->author_id = $authorId;
+            $refund->amount_minor = $amount;
+            $refund->currency = $attempt->currency;
+            $refund->idempotency_key = $idempotencyKey;
+            $refund->status = TerminalRefund::STATUS_RECORDED;
+            $refund->provider = $attempt->provider;
+            $refund->provider_ref = $result->providerRef;
+            $refund->last_error = $result->message;
+            $refund->save();
+
+            return [
+                'attempt' => $attempt->fresh(),
+                'refund' => $refund,
+            ];
+        } );
     }
 
     /**
@@ -204,8 +279,11 @@ class TerminalPaymentService
     {
         $blocking = TerminalAttempt::query()
             ->where( 'order_id', $order->id )
-            ->whereIn( 'status', TerminalAttempt::OPEN_STATUSES )
             ->whereNull( 'order_payment_id' )
+            ->where( function ( $query ): void {
+                $query->whereIn( 'status', TerminalAttempt::OPEN_STATUSES )
+                    ->orWhere( 'status', TerminalAttempt::STATUS_APPROVED );
+            } )
             ->lockForUpdate()
             ->exists();
 
@@ -214,12 +292,37 @@ class TerminalPaymentService
         }
     }
 
+    protected function assertIdempotencyMatches( TerminalAttempt $existing, Order $order, array $input ): void
+    {
+        $registerId = array_key_exists( 'register_id', $input ) && $input['register_id'] !== null
+            ? (int) $input['register_id']
+            : null;
+        $terminalId = (string) ( $input['terminal_id'] ?? $existing->terminal_id );
+        $provider = (string) ( $input['provider'] ?? $existing->provider );
+
+        if ( (int) $existing->order_id !== (int) $order->id ) {
+            throw new NotAllowedException( __( 'Idempotency key is bound to a different order.' ) );
+        }
+
+        if ( (int) ( $existing->register_id ?? 0 ) !== (int) ( $registerId ?? 0 ) ) {
+            throw new NotAllowedException( __( 'Idempotency key is bound to a different register.' ) );
+        }
+
+        if ( $existing->terminal_id !== $terminalId ) {
+            throw new NotAllowedException( __( 'Idempotency key is bound to a different terminal.' ) );
+        }
+
+        if ( $existing->provider !== $provider ) {
+            throw new NotAllowedException( __( 'Idempotency key is bound to a different provider.' ) );
+        }
+    }
+
     /**
      * @return array{attempt: TerminalAttempt, settled: bool, provider: string}
      */
-    protected function refreshAndMaybeSettle( TerminalAttempt $attempt, TerminalConnector $connector ): array
+    protected function refreshAndMaybeSettle( TerminalAttempt $attempt, TerminalConnector $connector, Order $order ): array
     {
-        if ( $attempt->isSettled() ) {
+        if ( $this->isSettledResponse( $attempt ) ) {
             return [
                 'attempt' => $attempt,
                 'settled' => true,
@@ -229,8 +332,6 @@ class TerminalPaymentService
 
         $result = $connector->status( $attempt );
         $this->applyConnectorResult( $attempt, $result );
-
-        $order = Order::query()->whereKey( $attempt->order_id )->lockForUpdate()->firstOrFail();
 
         return $this->settleIfApproved( $attempt->fresh(), $order );
     }
@@ -264,31 +365,27 @@ class TerminalPaymentService
             ];
         }
 
+        [$expectedMinor] = $this->remainingBalanceMinor( $order );
+
+        if ( $expectedMinor !== (int) $attempt->amount_minor ) {
+            $attempt->status = TerminalAttempt::STATUS_UNKNOWN;
+            $attempt->last_error = sprintf(
+                'Late approval amount %d does not match outstanding balance %d; preserved for reconciliation.',
+                (int) $attempt->amount_minor,
+                $expectedMinor
+            );
+            $attempt->save();
+
+            return [
+                'attempt' => $attempt->fresh(),
+                'settled' => false,
+                'provider' => $attempt->provider,
+            ];
+        }
+
         $precision = max( 0, (int) ns()->option->get( 'ns_currency_precision', 2 ) );
         $factor = 10 ** $precision;
         $value = $attempt->amount_minor / $factor;
-
-        [$expectedMinor] = $this->remainingBalanceMinor( $order );
-        // Allow settle when remaining covers this attempt (exact match preferred; tolerate already-partial).
-        if ( $expectedMinor < $attempt->amount_minor && $order->payment_status !== Order::PAYMENT_PAID ) {
-            // If tendered already includes an earlier payment of same attempt (race), skip.
-            $already = OrderPayment::query()
-                ->where( 'order_id', $order->id )
-                ->where( 'identifier', OrderPayment::PAYMENT_CARD_INTEGRATED )
-                ->where( 'reference', $attempt->provider_ref )
-                ->first();
-
-            if ( $already ) {
-                $attempt->order_payment_id = $already->id;
-                $attempt->save();
-
-                return [
-                    'attempt' => $attempt->fresh(),
-                    'settled' => true,
-                    'provider' => $attempt->provider,
-                ];
-            }
-        }
 
         $paymentPayload = [
             'identifier' => OrderPayment::PAYMENT_CARD_INTEGRATED,
@@ -300,15 +397,31 @@ class TerminalPaymentService
         $response = $this->ordersService->makeOrderSinglePayment( $paymentPayload, $order );
         $orderPayment = $response['data']['orderPayment'] ?? null;
 
-        if ( $orderPayment instanceof OrderPayment ) {
-            $attempt->order_payment_id = $orderPayment->id;
+        if ( ! $orderPayment instanceof OrderPayment ) {
+            $attempt->status = TerminalAttempt::STATUS_UNKNOWN;
+            $attempt->last_error = 'Approval could not be linked to an order payment; preserved for reconciliation.';
             $attempt->save();
+
+            return [
+                'attempt' => $attempt->fresh(),
+                'settled' => false,
+                'provider' => $attempt->provider,
+            ];
         }
+
+        $attempt->order_payment_id = $orderPayment->id;
+        $attempt->save();
 
         return [
             'attempt' => $attempt->fresh(),
             'settled' => true,
             'provider' => $attempt->provider,
         ];
+    }
+
+    protected function isSettledResponse( TerminalAttempt $attempt ): bool
+    {
+        return $attempt->order_payment_id !== null
+            && $attempt->status === TerminalAttempt::STATUS_APPROVED;
     }
 }

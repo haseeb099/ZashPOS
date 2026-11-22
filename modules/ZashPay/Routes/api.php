@@ -25,10 +25,6 @@ Route::middleware( [
     Route::post( 'attempts/{attempt}/cancel', [TerminalAttemptController::class, 'cancel'] )
         ->whereNumber( 'attempt' )
         ->name( 'zash-pay.api.attempts.cancel' );
-
-    Route::post( 'attempts/{attempt}/refund', [TerminalAttemptController::class, 'refund'] )
-        ->whereNumber( 'attempt' )
-        ->name( 'zash-pay.api.attempts.refund' );
 } );
 
 Route::middleware( [
@@ -39,4 +35,14 @@ Route::middleware( [
     Route::post( 'attempts/{attempt}/reconcile', [TerminalAttemptController::class, 'reconcile'] )
         ->whereNumber( 'attempt' )
         ->name( 'zash-pay.api.attempts.reconcile' );
+} );
+
+Route::middleware( [
+    SubstituteBindings::class,
+    'auth:sanctum',
+    NsRestrictMiddleware::arguments( 'zash.pay.refund' ),
+] )->prefix( 'zash-pay' )->group( function () {
+    Route::post( 'attempts/{attempt}/refund', [TerminalAttemptController::class, 'refund'] )
+        ->whereNumber( 'attempt' )
+        ->name( 'zash-pay.api.attempts.refund' );
 } );

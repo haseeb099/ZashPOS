@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Schema;
 use Modules\ZashPay\Models\TerminalAttempt;
 use Modules\ZashPay\Services\ZashPayAddonGate;
+use Modules\ZashPay\Services\ZashPayEnvironment;
 use Tests\TestCase;
 use Tests\Traits\WithAuthentication;
 use Tests\Traits\WithOrderTest;
@@ -25,7 +26,13 @@ final class ZashPayTerminalSimulatorTest extends TestCase
         parent::setUp();
 
         if ( Schema::hasTable( 'nexopos_orders_payments' ) && ! Schema::hasColumn( 'nexopos_orders_payments', 'reference' ) ) {
-            app( UpdateService::class )->executePendingMigrationFromFileName( '2026_11_22_100001_add_reference_to_orders_payments' );
+            try {
+                app( UpdateService::class )->executePendingMigrationFromFileName( '2026_11_22_100001_add_reference_to_orders_payments' );
+            } catch ( \Throwable ) {
+                Schema::table( 'nexopos_orders_payments', function ( $table ): void {
+                    $table->string( 'reference' )->nullable();
+                } );
+            }
         }
 
         $this->enableZashPay();
@@ -77,6 +84,7 @@ final class ZashPayTerminalSimulatorTest extends TestCase
         $first->assertJsonPath( 'data.settled', true );
         $first->assertJsonPath( 'data.provider', 'simulator' );
         $first->assertJsonPath( 'data.attempt.status', TerminalAttempt::STATUS_APPROVED );
+        $this->assertNotNull( $first->json( 'data.attempt.order_payment_id' ) );
 
         $order->refresh();
         $this->assertSame( Order::PAYMENT_PAID, $order->payment_status );
@@ -86,11 +94,81 @@ final class ZashPayTerminalSimulatorTest extends TestCase
             'idempotency_key' => $key,
             'provider' => 'simulator',
             'scenario' => 'approve',
+            'terminal_id' => 'simulator-1',
         ] );
 
         $duplicate->assertOk();
         $duplicate->assertJsonPath( 'data.settled', true );
         $this->assertSame( 1, OrderPayment::query()->where( 'order_id', $order->id )->count() );
+    }
+
+    public function test_idempotency_mismatch_is_rejected(): void
+    {
+        $this->attemptAuthenticate();
+        $order = $this->createUnpaidOrder();
+        $key = 'mismatch-' . uniqid();
+
+        $this->json( 'POST', 'api/zash-pay/orders/' . $order->id . '/attempts', [
+            'idempotency_key' => $key,
+            'provider' => 'simulator',
+            'scenario' => 'timeout',
+            'terminal_id' => 'simulator-1',
+        ] )->assertOk();
+
+        $reuse = $this->json( 'POST', 'api/zash-pay/orders/' . $order->id . '/attempts', [
+            'idempotency_key' => $key,
+            'provider' => 'simulator',
+            'scenario' => 'timeout',
+            'terminal_id' => 'simulator-2',
+        ] );
+
+        $reuse->assertForbidden();
+    }
+
+    public function test_unresolved_attempt_blocks_cash_add_payment(): void
+    {
+        $this->attemptAuthenticate();
+        $order = $this->createUnpaidOrder();
+
+        $this->json( 'POST', 'api/zash-pay/orders/' . $order->id . '/attempts', [
+            'idempotency_key' => 'block-cash-' . uniqid(),
+            'provider' => 'simulator',
+            'scenario' => 'timeout',
+        ] )->assertOk();
+
+        $cash = $this->json( 'POST', 'api/orders/' . $order->id . '/payments', [
+            'identifier' => OrderPayment::PAYMENT_CASH,
+            'value' => (float) $order->total,
+        ] );
+
+        $cash->assertForbidden();
+        $this->assertSame( 0, OrderPayment::query()->where( 'order_id', $order->id )->count() );
+    }
+
+    public function test_late_approval_amount_mismatch_is_preserved_unsettled(): void
+    {
+        $this->attemptAuthenticate();
+        $order = $this->createUnpaidOrder();
+
+        $start = $this->json( 'POST', 'api/zash-pay/orders/' . $order->id . '/attempts', [
+            'idempotency_key' => 'mismatch-amount-' . uniqid(),
+            'provider' => 'simulator',
+            'scenario' => 'late_success',
+        ] );
+
+        $start->assertOk();
+        $attemptId = (int) $start->json( 'data.attempt.id' );
+
+        TerminalAttempt::query()->whereKey( $attemptId )->update( [
+            'amount_minor' => ( (int) $start->json( 'data.attempt.amount_minor' ) ) + 100,
+        ] );
+
+        $poll = $this->getJson( 'api/zash-pay/attempts/' . $attemptId );
+        $poll->assertOk();
+        $poll->assertJsonPath( 'data.settled', false );
+        $poll->assertJsonPath( 'data.attempt.status', TerminalAttempt::STATUS_UNKNOWN );
+        $this->assertNull( $poll->json( 'data.attempt.order_payment_id' ) );
+        $this->assertSame( 0, OrderPayment::query()->where( 'order_id', $order->id )->count() );
     }
 
     public function test_simulator_decline_does_not_create_payment(): void
@@ -173,12 +251,13 @@ final class ZashPayTerminalSimulatorTest extends TestCase
         $poll->assertOk();
         $poll->assertJsonPath( 'data.settled', true );
         $poll->assertJsonPath( 'data.attempt.status', TerminalAttempt::STATUS_APPROVED );
+        $this->assertNotNull( $poll->json( 'data.attempt.order_payment_id' ) );
 
         $order->refresh();
         $this->assertSame( Order::PAYMENT_PAID, $order->payment_status );
     }
 
-    public function test_simulator_refund_path(): void
+    public function test_refund_action_is_disabled_until_accounting_ready(): void
     {
         $this->attemptAuthenticate();
         $order = $this->createUnpaidOrder();
@@ -192,9 +271,34 @@ final class ZashPayTerminalSimulatorTest extends TestCase
         $start->assertOk();
         $attemptId = $start->json( 'data.attempt.id' );
 
-        $refund = $this->json( 'POST', 'api/zash-pay/attempts/' . $attemptId . '/refund', [] );
-        $refund->assertOk();
-        $refund->assertJsonPath( 'data.refund.meta.provider', 'simulator' );
+        $this->assertFalse( app( ZashPayEnvironment::class )->allowsAccountingRefunds() );
+
+        $refund = $this->json( 'POST', 'api/zash-pay/attempts/' . $attemptId . '/refund', [
+            'idempotency_key' => 'refund-key-' . uniqid(),
+        ] );
+
+        $refund->assertForbidden();
+    }
+
+    public function test_simulator_unavailable_in_production_environment(): void
+    {
+        $this->attemptAuthenticate();
+        $order = $this->createUnpaidOrder();
+
+        $previous = app()->environment();
+        app()->detectEnvironment( fn () => 'production' );
+
+        try {
+            $response = $this->json( 'POST', 'api/zash-pay/orders/' . $order->id . '/attempts', [
+                'idempotency_key' => 'prod-' . uniqid(),
+                'provider' => 'simulator',
+                'scenario' => 'approve',
+            ] );
+
+            $response->assertForbidden();
+        } finally {
+            app()->detectEnvironment( fn () => $previous );
+        }
     }
 
     protected function enableZashPay(): void

@@ -865,6 +865,8 @@ class OrdersService
          * order and only update them.
          */
         return collect( $payments )->map( function ( $payment ) use ( $order ) {
+            Hook::action( 'ns-before-order-payment', $payment, $order );
+
             return $this->__saveOrderSinglePayment( $payment, $order );
         } );
     }
@@ -892,6 +894,8 @@ class OrdersService
         if ( $order->payment_status === Order::PAYMENT_PAID ) {
             throw new NotAllowedException( __( 'Unable to proceed as the order is already paid.' ) );
         }
+
+        Hook::action( 'ns-before-order-payment', $payment, $order );
 
         /**
          * We want to prevent making payment on register that are closed.

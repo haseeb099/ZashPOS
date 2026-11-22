@@ -5,8 +5,11 @@ namespace Modules\ZashPay\Providers;
 use App\Classes\Hook;
 use App\Events\RenderFooterEvent;
 use App\Events\SettingsSavedEvent;
+use App\Models\Order;
 use Illuminate\Support\ServiceProvider;
+use Modules\ZashPay\Services\UnresolvedTerminalAttemptGuard;
 use Modules\ZashPay\Services\ZashPayAddonGate;
+use Modules\ZashPay\Services\ZashPayEnvironment;
 use Modules\ZashPay\Settings\ZashPaySettings;
 
 class ZashPayServiceProvider extends ServiceProvider
@@ -14,6 +17,8 @@ class ZashPayServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->singleton( ZashPayAddonGate::class );
+        $this->app->singleton( ZashPayEnvironment::class );
+        $this->app->singleton( UnresolvedTerminalAttemptGuard::class );
     }
 
     public function boot(): void
@@ -33,6 +38,11 @@ class ZashPayServiceProvider extends ServiceProvider
 
             return $menus;
         } );
+
+        Hook::addAction( 'ns-before-order-payment', function ( $payment, Order $order ): void {
+            $identifier = is_array( $payment ) ? ( $payment['identifier'] ?? null ) : null;
+            app( UnresolvedTerminalAttemptGuard::class )->assertAllowsPayment( $order, is_array( $payment ) ? $payment : $identifier );
+        }, 20, 2 );
 
         $this->app->make( 'events' )->listen( SettingsSavedEvent::class, function ( SettingsSavedEvent $event ): void {
             $isZashPay = $event->settingsClass === ZashPaySettings::class

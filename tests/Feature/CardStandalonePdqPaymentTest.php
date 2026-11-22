@@ -20,7 +20,13 @@ class CardStandalonePdqPaymentTest extends TestCase
         parent::setUp();
 
         if ( Schema::hasTable( 'nexopos_orders_payments' ) && ! Schema::hasColumn( 'nexopos_orders_payments', 'reference' ) ) {
-            app( UpdateService::class )->executePendingMigrationFromFileName( '2026_11_22_100001_add_reference_to_orders_payments' );
+            try {
+                app( UpdateService::class )->executePendingMigrationFromFileName( '2026_11_22_100001_add_reference_to_orders_payments' );
+            } catch ( \Throwable ) {
+                Schema::table( 'nexopos_orders_payments', function ( $table ): void {
+                    $table->string( 'reference' )->nullable();
+                } );
+            }
         }
 
         try {

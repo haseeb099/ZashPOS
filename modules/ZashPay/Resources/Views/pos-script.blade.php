@@ -1,10 +1,11 @@
 <script>
 (() => {
     const enabled = @json( ns()->option->get( 'zash_pay_integrated_enabled', 'no' ) === 'yes' );
-    window.zashPayIntegratedEnabled = enabled;
+    const simulatorAvailable = @json( ! app()->environment( 'production' ) );
+    window.zashPayIntegratedEnabled = enabled && simulatorAvailable;
     window.zashPayProviderLabel = 'Simulator (not a physical or provider sandbox)';
 
-    if ( typeof nsHooks === 'undefined' || ! enabled ) {
+    if ( typeof nsHooks === 'undefined' || ! window.zashPayIntegratedEnabled ) {
         return;
     }
 
