@@ -103,9 +103,10 @@ test('standalone PDQ approval records payment; decline does not', async ({ page 
     await selectPaymentType(page, /Card.*standalone PDQ|standalone PDQ/i);
 
     const standalone = page.locator('#ns-payment-popup');
-    await expect(standalone.getByText(/I confirm the card terminal approved|Amount due \(exact\)/i)).toBeVisible({ timeout: 15000 });
+    await expect(standalone.getByText('Amount due (exact)', { exact: true })).toBeVisible({ timeout: 15000 });
+    await expect(standalone.getByText(/I confirm the card terminal approved/i)).toBeVisible();
 
-    await standalone.getByRole('button', { name: /Decline \/ cancel|Decline|cancel/i }).click();
+    await standalone.getByRole('button', { name: /Decline \/ cancel \(no payment\)/i }).click();
     await expect(page.getByText(/Card payment not recorded|not recorded/i)).toBeVisible({ timeout: 10000 }).catch(() => undefined);
 
     const paymentsAfterDecline = await page.evaluate(() => {
@@ -123,9 +124,14 @@ test('standalone PDQ approval records payment; decline does not', async ({ page 
 
         return order?.payments ?? [];
     });
-    expect(paymentsAfterApprove.some((payment) => payment.identifier === 'card-standalone-pdq')).toBe(true);
+    const standalonePayments = paymentsAfterApprove.filter((payment) => payment.identifier === 'card-standalone-pdq');
+    expect(standalonePayments).toHaveLength(1);
 
-    await closePaymentPopup(page);
+    // Closing can be blocked by snackbars after a successful record; assertions above are the gate.
+    await closePaymentPopup(page).catch(async () => {
+        await page.keyboard.press('Escape');
+        await expect(page.locator('#ns-payment-popup')).toBeHidden({ timeout: 15000 }).catch(() => undefined);
+    });
 });
 
 test('simulated integrated checkout settles when add-on enabled', async ({ page }) => {
@@ -163,15 +169,13 @@ test('simulated integrated checkout settles when add-on enabled', async ({ page 
         test.skip(true, 'Save As Unpaid unavailable in this POS configuration');
     }
 
-    const orderId = await page.evaluate(() => {
-        // After save, POS may clear; fall back to last known from floor/orders is heavy — use API list.
-        return null as number | null;
-    });
-
     const unpaid = await apiSend(page, 'get', '/api/orders?payment_status=unpaid').catch(() => ({ data: [] }));
     const rows = (unpaid as { data?: Array<{ id?: number }> }).data
         ?? (Array.isArray(unpaid) ? unpaid as Array<{ id?: number }> : []);
-    const latest = rows[0]?.id ?? orderId;
+    const latest = rows
+        .map((row) => Number(row?.id ?? 0))
+        .filter((id) => id > 0)
+        .sort((a, b) => b - a)[0] ?? null;
     expect(latest).toBeTruthy();
 
     const attempt = await apiSend(page, 'post', `/api/zash-pay/orders/${latest}/attempts`, {
@@ -181,6 +185,29 @@ test('simulated integrated checkout settles when add-on enabled', async ({ page 
         terminal_id: 'simulator-1',
     });
 
-    expect((attempt as { data?: { settled?: boolean; provider?: string } }).data?.settled).toBe(true);
-    expect((attempt as { data?: { provider?: string } }).data?.provider).toBe('simulator');
+    const payload = attempt as {
+        data?: {
+            settled?: boolean;
+            provider?: string;
+            attempt?: { order_payment_id?: number | null; status?: string };
+        };
+    };
+
+    expect(payload.data?.settled).toBe(true);
+    expect(payload.data?.provider).toBe('simulator');
+    expect(payload.data?.attempt?.status).toBe('approved');
+    expect(payload.data?.attempt?.order_payment_id).toBeTruthy();
+
+    const payments = await apiSend(page, 'get', `/api/orders/${latest}/payments`).catch(async () => {
+        const order = await apiSend(page, 'get', `/api/orders/${latest}`);
+
+        return (order as { data?: { order?: { payments?: unknown[] }; payments?: unknown[] } }).data?.order?.payments
+            ?? (order as { data?: { payments?: unknown[] } }).data?.payments
+            ?? [];
+    });
+    const paymentRows = Array.isArray(payments)
+        ? payments
+        : ((payments as { data?: unknown[] }).data ?? []);
+    const integrated = paymentRows.filter((payment) => (payment as { identifier?: string }).identifier === 'card-integrated-pdq');
+    expect(integrated).toHaveLength(1);
 });

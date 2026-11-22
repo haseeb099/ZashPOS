@@ -25,20 +25,20 @@
                     template: `
                         <div class="h-full flex flex-col p-2">
                             <div class="ns-box shadow flex-auto flex flex-col overflow-hidden p-4 gap-3">
-                                <h3 class="font-semibold text-lg">{{ label }}</h3>
-                                <p class="text-sm opacity-80">{{ providerLabel }}</p>
+                                <h3 class="font-semibold text-lg">@{{ label }}</h3>
+                                <p class="text-sm opacity-80">@{{ providerLabel }}</p>
                                 <div class="ns-box border rounded p-3">
-                                    <div class="text-sm opacity-70">{{ __( 'Amount due (server-calculated)' ) }}</div>
-                                    <div class="text-3xl font-bold">{{ nsCurrency( remaining ) }}</div>
+                                    <div class="text-sm opacity-70">@{{ __( 'Amount due (server-calculated)' ) }}</div>
+                                    <div class="text-3xl font-bold">@{{ nsCurrency( remaining ) }}</div>
                                 </div>
                                 <label class="flex flex-col gap-1">
-                                    <span class="text-sm font-medium">{{ __( 'Simulator terminal' ) }}</span>
+                                    <span class="text-sm font-medium">@{{ __( 'Simulator terminal' ) }}</span>
                                     <select v-model="terminalId" class="ns-input outline-hidden border rounded px-3 py-2">
                                         <option value="simulator-1">Simulator terminal 1</option>
                                     </select>
                                 </label>
                                 <label class="flex flex-col gap-1">
-                                    <span class="text-sm font-medium">{{ __( 'Simulator scenario' ) }}</span>
+                                    <span class="text-sm font-medium">@{{ __( 'Simulator scenario' ) }}</span>
                                     <select v-model="scenario" class="ns-input outline-hidden border rounded px-3 py-2">
                                         <option value="approve">Approve</option>
                                         <option value="decline">Decline</option>
@@ -48,9 +48,9 @@
                                         <option value="unknown">Unknown</option>
                                     </select>
                                 </label>
-                                <p v-if="statusText" class="text-sm">{{ statusText }}</p>
-                                <button type="button" class="ns-button ns-button-primary py-3 font-semibold" :disabled="busy || remaining <= 0" @click="startCheckout">
-                                    {{ busy ? __( 'Waiting on terminal…' ) : __( 'Charge simulator terminal' ) }}
+                                <p v-if="statusText" class="text-sm">@{{ statusText }}</p>
+                                <button type="button" class="ns-button ns-button-primary py-3 font-semibold" :disabled="busy || remaining <= 0" @@click="startCheckout">
+                                    @{{ busy ? __( 'Waiting on terminal…' ) : __( 'Charge simulator terminal' ) }}
                                 </button>
                             </div>
                         </div>
